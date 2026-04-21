@@ -24,21 +24,24 @@ get_settings.cache_clear()
 st.set_page_config(
     page_title="Agent Marketplace",
     page_icon="🤖",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# ── Session State Initialization ──────────────────────────────────────────────
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+def init_session_state():
+    st.session_state.setdefault("current_user", None)
+    st.session_state.setdefault("current_buyer", None)
+    st.session_state.setdefault("current_seller", None)
+    st.session_state.setdefault("buyer_wallet_address", None)
+    st.session_state.setdefault("buyer_wallet_funded", False)
+    st.session_state.setdefault("research_results", None)
+    st.session_state.setdefault("research_error", None)
 
-def initialize_state() -> None:
-    st.session_state.setdefault("created_users", [])
-    st.session_state.setdefault("created_agents", [])
-    st.session_state.setdefault("active_user", None)
-    st.session_state.setdefault("active_buyer", None)
-    st.session_state.setdefault("active_seller", None)
-    st.session_state.setdefault("last_run", None)
+init_session_state()
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 class SellerProxy:
     def __init__(self, *_: Any, **__: Any) -> None:
@@ -51,6 +54,14 @@ class SellerProxy:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         return self._inner.__exit__(exc_type, exc, tb)
 
+    def post(self, url: str, **kwargs):
+        if "://" in url:
+            path = url.split("://", 1)[1].split("/", 1)[1]
+            path = "/" + path
+        else:
+            path = url
+        return self._inner.post(path, **kwargs)
+
 
 @contextmanager
 def embedded_client() -> Iterator[TestClient]:
@@ -62,19 +73,11 @@ def embedded_client() -> Iterator[TestClient]:
 def api_request(
     method: str,
     path: str,
-    payload: dict[str, Any] | None,
-    mode: str,
-    api_base_url: str,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if mode == "Embedded":
-        with embedded_client() as client:
-            response = client.request(method, path, json=payload)
-    else:
-        with httpx.Client(
-            base_url=api_base_url.rstrip("/"),
-            timeout=get_settings().request_timeout_seconds,
-        ) as client:
-            response = client.request(method, path, json=payload)
+    """Make API request using embedded mode."""
+    with embedded_client() as client:
+        response = client.request(method, path, json=payload)
 
     if response.status_code >= 400:
         try:
@@ -84,455 +87,299 @@ def api_request(
             detail = response.text
         raise RuntimeError(f"HTTP {response.status_code}: {detail}")
 
-    response.raise_for_status()
     return response.json()
 
 
-def upsert_user(user: dict[str, Any]) -> None:
-    st.session_state.created_users = [
-        u for u in st.session_state.created_users if u["id"] != user["id"]
-    ] + [user]
-    st.session_state.active_user = user["id"]
+# ── Main UI ───────────────────────────────────────────────────────────────────
 
+st.title("🤖 Agent Marketplace")
+st.markdown("Complete flow: User → Register → Fund Wallet → Plan Research → Payment → Results")
 
-def upsert_agent(agent: dict[str, Any]) -> None:
-    st.session_state.created_agents = [
-        a for a in st.session_state.created_agents if a["id"] != agent["id"]
-    ] + [agent]
-    if agent["role"] == "buyer":
-        st.session_state.active_buyer = agent["id"]
-    if agent["role"] == "seller":
-        st.session_state.active_seller = agent["id"]
+# Create tabs for the flow
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "1️⃣ Register User",
+    "2️⃣ Setup Agents",
+    "3️⃣ Fund Wallet",
+    "4️⃣ Plan & Pay",
+    "5️⃣ Results"
+])
 
+# ── TAB 1: Register User ──────────────────────────────────────────────────────
+with tab1:
+    st.header("Register New User")
 
-def find_user(user_id: str | None) -> dict[str, Any] | None:
-    if not user_id:
-        return None
-    return next((u for u in st.session_state.created_users if u["id"] == user_id), None)
-
-
-def find_agent(agent_id: str | None) -> dict[str, Any] | None:
-    if not agent_id:
-        return None
-    return next((a for a in st.session_state.created_agents if a["id"] == agent_id), None)
-
-
-def provision_agent(role: str, name: str, mode: str, api_base_url: str) -> dict[str, Any]:
-    return api_request(
-        "POST",
-        "/agents",
-        {
-            "user_id": st.session_state.active_user,
-            "role": role,
-            "name": name,
-            "endpoint_url": None,
-        },
-        mode,
-        api_base_url,
-    )
-
-
-# ── sidebar ───────────────────────────────────────────────────────────────────
-
-def render_sidebar(mode: str, api_base_url: str) -> None:
-    settings = get_settings()
-
-    st.header("Status")
-    st.write(f"**Mode:** {mode}")
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("Circle", "✅ On" if settings.circle_enabled else "❌ Off")
+        user_display_name = st.text_input(
+            "User Display Name",
+            value="Demo User",
+            key="user_display_name"
+        )
     with col2:
-        st.metric("LLM", "✅ Live" if settings.live_llm_enabled else "⚠️ Stub")
+        if st.button("✅ Register User", key="btn_register_user", use_container_width=True):
+            try:
+                with st.spinner("Registering user..."):
+                    result = api_request("POST", "/users", {
+                        "display_name": user_display_name
+                    })
+                    user = result["user"]
+                    st.session_state.current_user = user
+                    st.success(f"✅ User registered: {user['id']}")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error: {e}")
 
-    st.divider()
-    st.header("Progress")
+    if st.session_state.current_user:
+        user = st.session_state.current_user
+        st.info(f"""
+        **Current User:**
+        - ID: `{user['id']}`
+        - Name: {user['display_name']}
+        - Created: {user['created_at']}
+        """)
 
-    user = find_user(st.session_state.active_user)
-    buyer = find_agent(st.session_state.active_buyer)
-    seller = find_agent(st.session_state.active_seller)
-    run = st.session_state.last_run
 
-    def step(n: int, label: str, done: bool, detail: str = "") -> None:
-        icon = "✅" if done else "⬜"
-        text = f"{icon} **{n}. {label}**"
-        if detail:
-            text += f"  \n`{detail}`"
-        st.markdown(text)
+# ── TAB 2: Setup Agents ───────────────────────────────────────────────────────
+with tab2:
+    st.header("Setup Buyer & Seller Agents")
 
-    step(1, "User", bool(user), user["display_name"] if user else "")
-    if buyer:
-        addr = buyer["wallet"]["address"]
-        step(2, "Buyer", True, f"{buyer['name']} · {addr[:6]}…{addr[-4:]}")
+    if not st.session_state.current_user:
+        st.warning("⚠️ Please register a user in Tab 1 first")
     else:
-        step(2, "Buyer", False, "")
-    if seller:
-        addr = seller["wallet"]["address"]
-        step(3, "Research Agent", True, f"{seller['name']} · {addr[:6]}…{addr[-4:]}")
+        user_id = st.session_state.current_user["id"]
+
+        col1, col2 = st.columns(2)
+
+        # Buyer Agent
+        with col1:
+            st.subheader("👤 Buyer Agent")
+            buyer_name = st.text_input("Buyer Name", value="Demo Buyer", key="buyer_name")
+
+            if st.button("Create Buyer", key="btn_create_buyer", use_container_width=True):
+                try:
+                    with st.spinner("Creating buyer agent..."):
+                        result = api_request("POST", "/agents", {
+                            "user_id": user_id,
+                            "role": "buyer",
+                            "name": buyer_name
+                        })
+                        buyer = result["agent"]
+                        st.session_state.current_buyer = buyer
+                        st.session_state.buyer_wallet_address = buyer["wallet"]["address"]
+                        st.success(f"✅ Buyer created")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+
+            if st.session_state.current_buyer:
+                buyer = st.session_state.current_buyer
+                st.success(f"""
+                **Buyer Agent Created**
+                - ID: `{buyer['id']}`
+                - Wallet: `{buyer['wallet']['address']}`
+                """)
+
+        # Seller Agent
+        with col2:
+            st.subheader("🔬 Research Agent (Seller)")
+            seller_name = st.text_input("Research Agent Name", value="Demo Researcher", key="seller_name")
+
+            if st.button("Create Seller", key="btn_create_seller", use_container_width=True):
+                try:
+                    with st.spinner("Creating research agent..."):
+                        result = api_request("POST", "/agents", {
+                            "user_id": user_id,
+                            "role": "seller",
+                            "name": seller_name
+                        })
+                        seller = result["agent"]
+                        st.session_state.current_seller = seller
+                        st.success(f"✅ Research agent created")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {e}")
+
+            if st.session_state.current_seller:
+                seller = st.session_state.current_seller
+                st.success(f"""
+                **Research Agent Created**
+                - ID: `{seller['id']}`
+                - Wallet: `{seller['wallet']['address']}`
+                """)
+
+
+# ── TAB 3: Fund Wallet ────────────────────────────────────────────────────────
+with tab3:
+    st.header("💰 Fund Buyer Wallet")
+
+    if not st.session_state.current_buyer:
+        st.warning("⚠️ Create buyer agent in Tab 2 first")
     else:
-        step(3, "Research Agent", False, "")
-    step(4, "Run", bool(run), run["thread_id"] if run else "")
+        buyer = st.session_state.current_buyer
+        wallet_addr = buyer["wallet"]["address"]
 
+        st.info(f"""
+        **Buyer Wallet to Fund:**
+        - Address: `{wallet_addr}`
+        - Current Status: Stub wallet (demo mode)
 
-# ── main ──────────────────────────────────────────────────────────────────────
+        **In production with real Circle:**
+        1. Visit: https://faucet.circle.com
+        2. Enter wallet address: `{wallet_addr}`
+        3. Request USDC tokens
+        4. Check funding status below
+        """)
 
-def main() -> None:
-    initialize_state()
-
-    with st.sidebar:
-        st.title("⚙️ Settings")
-        mode = st.radio("Execution mode", ["Embedded", "Remote API"])
-        api_base_url = st.text_input("API base URL", value="http://127.0.0.1:8000")
-        st.divider()
-        render_sidebar(mode, api_base_url)
-
-    st.title("🤖 Agent Marketplace Demo")
-    st.caption("Buyer agent pays a research agent via Circle wallets on Arc Testnet.")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 1 — User
-    # ─────────────────────────────────────────────────────────────────────────
-    st.header("1. Create User")
-    with st.form("create-user"):
         col1, col2 = st.columns(2)
         with col1:
-            display_name = st.text_input("Display name", placeholder="Yuvraj")
+            amount_usdc = st.number_input(
+                "Amount to fund (USDC)",
+                min_value=0.001,
+                value=10.0,
+                step=0.1
+            )
+
         with col2:
-            external_id = st.text_input("External ID (optional)", placeholder="demo-01")
-        if st.form_submit_button("Create user", use_container_width=True):
-            if not display_name.strip():
-                st.error("Display name is required.")
-            else:
-                try:
-                    data = api_request(
-                        "POST",
-                        "/users",
-                        {"display_name": display_name.strip(), "external_id": external_id.strip() or None},
-                        mode,
-                        api_base_url,
-                    )
-                    upsert_user(data["user"])
-                    st.rerun()
-                except Exception as exc:
-                    st.error(str(exc))
+            if st.button("✅ Confirm Funded", key="btn_confirm_funded", use_container_width=True):
+                st.session_state.buyer_wallet_funded = True
+                st.success(f"💰 Wallet funded with {amount_usdc} USDC (demo mode)")
+                st.rerun()
 
-    if st.session_state.created_users:
-        options = {
-            f"{u['display_name']} ({u['id'][:8]})": u["id"]
-            for u in st.session_state.created_users
-        }
-        selected = st.selectbox(
-            "Active user",
-            list(options.keys()),
-            index=(
-                max(0, list(options.values()).index(st.session_state.active_user))
-                if st.session_state.active_user in options.values()
-                else 0
-            ),
-            key="user_select",
+        if st.session_state.buyer_wallet_funded:
+            st.success(f"✅ Wallet is ready with {amount_usdc} USDC")
+
+
+# ── TAB 4: Plan & Pay ─────────────────────────────────────────────────────────
+with tab4:
+    st.header("🔄 Plan Research & Execute Payment")
+
+    if not st.session_state.current_buyer or not st.session_state.current_seller:
+        st.warning("⚠️ Setup both agents in Tab 2 first")
+    elif not st.session_state.buyer_wallet_funded:
+        st.warning("⚠️ Fund wallet in Tab 3 first")
+    else:
+        user = st.session_state.current_user
+        buyer = st.session_state.current_buyer
+        seller = st.session_state.current_seller
+
+        st.subheader("📝 Research Query")
+        user_goal = st.text_area(
+            "What would you like to research?",
+            value="What is Arc Testnet and how does it work?",
+            height=100,
+            key="user_goal"
         )
-        if st.session_state.active_user != options[selected]:
-            st.session_state.active_user = options[selected]
-            st.rerun()
 
-    st.divider()
+        if st.button("🚀 Start Research Flow", key="btn_start_research", use_container_width=True):
+            try:
+                with st.spinner("🔄 Executing research flow..."):
+                    st.info("Step 1: 📋 Planning research tasks...")
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 2 — Provision agents
-    # ─────────────────────────────────────────────────────────────────────────
-    st.header("2. Provision Agents")
+                    st.info("Step 2: 💳 Buyer initiating payment to research agent...")
 
-    if not st.session_state.active_user:
-        st.info("Create a user first.")
-    else:
-        # ── Quick Research Setup ──────────────────────────────────────────────
-        buyer_ready = bool(st.session_state.active_buyer)
-        seller_ready = bool(st.session_state.active_seller)
+                    st.info("Step 3: 🔬 Research agent executing query...")
 
-        if not buyer_ready or not seller_ready:
-            with st.container(border=True):
-                st.subheader("🔬 Quick Research Setup")
-                st.caption(
-                    "Provisions a **Buyer** agent and a **Research Agent** (seller) "
-                    "with pre-configured Circle wallets — ready to run in one click."
-                )
-                col1, col2 = st.columns(2)
-                with col1:
-                    quick_buyer_name = st.text_input(
-                        "Buyer name", value="Research Buyer", key="quick_buyer_name"
-                    )
-                with col2:
-                    quick_seller_name = st.text_input(
-                        "Research Agent name", value="Arc Research Agent", key="quick_seller_name"
-                    )
+                    st.info("Step 4: 📊 Synthesizing results...")
 
-                if st.button("⚡ Provision Research Agent Pair", use_container_width=True, type="primary"):
-                    errors = []
-                    with st.spinner("Provisioning agents…"):
-                        if not buyer_ready:
-                            try:
-                                data = provision_agent("buyer", quick_buyer_name.strip() or "Research Buyer", mode, api_base_url)
-                                upsert_agent(data["agent"])
-                                buyer_ready = True
-                            except Exception as exc:
-                                errors.append(f"Buyer: {exc}")
+                    # Execute the marketplace flow
+                    result = api_request("POST", "/run", {
+                        "user_goal": user_goal,
+                        "thread_id": f"demo-{uuid.uuid4().hex[:8]}",
+                        "buyer_agent_id": buyer["id"],
+                        "seller_agent_id": seller["id"]
+                    })
 
-                        if not seller_ready:
-                            try:
-                                data = provision_agent("seller", quick_seller_name.strip() or "Arc Research Agent", mode, api_base_url)
-                                upsert_agent(data["agent"])
-                                seller_ready = True
-                            except Exception as exc:
-                                errors.append(f"Research Agent: {exc}")
+                    st.session_state.research_results = result
+                    st.session_state.research_error = None
 
-                    for err in errors:
-                        st.error(err)
-                    if not errors:
-                        st.rerun()
+                    st.success("✅ Research flow completed!")
+                    st.rerun()
 
-        if buyer_ready and seller_ready:
-            buyer = find_agent(st.session_state.active_buyer)
-            seller = find_agent(st.session_state.active_seller)
-            col1, col2 = st.columns(2)
-            with col1:
-                st.success(f"✅ Buyer: **{buyer['name']}**")
-                if buyer:
-                    st.caption(f"`{buyer['wallet']['address']}`")
-            with col2:
-                st.success(f"✅ Research Agent: **{seller['name']}**")
-                if seller:
-                    st.caption(f"`{seller['wallet']['address']}`")
+            except Exception as e:
+                st.session_state.research_error = str(e)
+                st.error(f"❌ Error: {e}")
 
-        # ── Manual provisioning (advanced) ────────────────────────────────────
-        with st.expander("➕ Provision a custom agent manually"):
-            with st.form("create-agent"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    role = st.selectbox("Role", ["buyer", "seller"])
-                with col2:
-                    name = st.text_input("Agent name", placeholder="My Research Agent")
-                endpoint_url = st.text_input(
-                    "Endpoint URL (optional)",
-                    placeholder="Leave blank for default",
-                )
-                if st.form_submit_button("Provision wallet", use_container_width=True):
-                    if not name.strip():
-                        st.error("Agent name is required.")
-                    else:
-                        try:
-                            with st.spinner("Provisioning Circle wallet…"):
-                                data = api_request(
-                                    "POST",
-                                    "/agents",
-                                    {
-                                        "user_id": st.session_state.active_user,
-                                        "role": role,
-                                        "name": name.strip(),
-                                        "endpoint_url": endpoint_url.strip() or None,
-                                    },
-                                    mode,
-                                    api_base_url,
-                                )
-                            upsert_agent(data["agent"])
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(str(exc))
 
-        # Active agent selectors (shown when multiple exist)
-        active_user_id = st.session_state.active_user
-        active_agents = [a for a in st.session_state.created_agents if a["user_id"] == active_user_id]
-        buyers = [a for a in active_agents if a["role"] == "buyer"]
-        sellers = [a for a in active_agents if a["role"] == "seller"]
+# ── TAB 5: Results ────────────────────────────────────────────────────────────
+with tab5:
+    st.header("📊 Research Results")
 
-        if len(buyers) > 1 or len(sellers) > 1:
-            col1, col2 = st.columns(2)
-            with col1:
-                if len(buyers) > 1:
-                    buyer_opts = {f"{a['name']} ({a['wallet']['address'][:6]}…)": a["id"] for a in buyers}
-                    chosen = st.selectbox("Active buyer", list(buyer_opts.keys()), key="buyer_select")
-                    st.session_state.active_buyer = buyer_opts[chosen]
-            with col2:
-                if len(sellers) > 1:
-                    seller_opts = {f"{a['name']} ({a['wallet']['address'][:6]}…)": a["id"] for a in sellers}
-                    chosen = st.selectbox("Active research agent", list(seller_opts.keys()), key="seller_select")
-                    st.session_state.active_seller = seller_opts[chosen]
-
-    st.divider()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 3 — Run
-    # ─────────────────────────────────────────────────────────────────────────
-    st.header("3. Run Research Flow")
-
-    if not st.session_state.active_buyer or not st.session_state.active_seller:
-        st.info("Provision a buyer and research agent pair above.")
-    else:
-        buyer = find_agent(st.session_state.active_buyer)
-        seller = find_agent(st.session_state.active_seller)
-
-        if buyer and seller:
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Buyer wallet", f"{buyer['wallet']['address'][:8]}…")
-                st.caption(f"`{buyer['wallet']['address']}`")
-            with col2:
-                st.metric("Research Agent wallet", f"{seller['wallet']['address'][:8]}…")
-                st.caption(f"`{seller['wallet']['address']}`")
-            with col3:
-                st.metric("Chain", buyer["wallet"]["blockchain"])
-            with col4:
-                st.metric("Status", "⚠️ Unfunded")
-                st.link_button(
-                    "🔗 Fund at Faucet",
-                    "https://faucet.circle.com",
-                    use_container_width=True,
-                )
-
-            st.info(
-                "**Buyer wallet funding required:** Head to the Circle Testnet Faucet and paste your buyer wallet address "
-                f"(`{buyer['wallet']['address']}`) to receive test USDC. You need at least 0.001 USDC per research query."
-            )
-
-        with st.form("run-marketplace"):
-            # Debug info
-            with st.expander("ℹ️ Debug / Agent IDs"):
-                st.write(f"**Buyer ID:** `{st.session_state.active_buyer}`")
-                st.write(f"**Seller ID:** `{st.session_state.active_seller}`")
-
-            user_goal = st.text_area(
-                "Research goal",
-                value="Research the top 3 DeFi protocols on Arc and explain why low-fee programmable money matters.",
-                height=100,
-            )
-            thread_id = st.text_input("Thread ID", value=f"demo-{uuid.uuid4().hex[:8]}")
-            if st.form_submit_button("▶ Run paid research", use_container_width=True, type="primary"):
-                if not user_goal.strip():
-                    st.error("Research goal is required.")
-                elif not st.session_state.active_buyer or not st.session_state.active_seller:
-                    st.error("❌ Buyer and seller agents must be provisioned first.")
-                else:
-                    try:
-                        with st.spinner("Buyer → pays → Research Agent → synthesizes…"):
-                            data = api_request(
-                                "POST",
-                                "/run",
-                                {
-                                    "user_goal": user_goal.strip(),
-                                    "thread_id": thread_id.strip(),
-                                    "buyer_agent_id": st.session_state.active_buyer,
-                                    "seller_agent_id": st.session_state.active_seller,
-                                },
-                                mode,
-                                api_base_url,
-                            )
-                        st.session_state.last_run = data
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"❌ Error: {str(exc)}")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Step 4 — Results
-    # ─────────────────────────────────────────────────────────────────────────
-    run = st.session_state.last_run
-    if run:
-        st.divider()
-        st.header("4. Research Results")
-        st.caption(f"Thread: `{run['thread_id']}`")
-
-        # Show final answer prominently
-        final_answer = run.get("final_answer")
-        if final_answer:
-            st.subheader("📋 Combined Research Answer")
-            with st.container(border=True):
-                st.markdown(final_answer)
+    if not st.session_state.research_results:
+        if st.session_state.research_error:
+            st.error(f"❌ {st.session_state.research_error}")
         else:
-            st.info("No final answer yet — check payment status or wait for synthesis.")
+            st.info("Run the research flow in Tab 4 to see results")
+    else:
+        result = st.session_state.research_results
 
-        # ── Payment records ───────────────────────────────────────────────────
-        payments = run.get("payments") or []
-        tx_hashes = run.get("transaction_hashes") or []
+        # Final Answer
+        if result.get("final_answer"):
+            st.subheader("✅ Final Answer")
+            st.markdown(result["final_answer"])
 
-        if payments or tx_hashes:
-            st.subheader("💸 Payments")
-            settings = get_settings()
-
-            if payments:
-                for pmt in payments:
-                    with st.container(border=True):
-                        col1, col2, col3 = st.columns([2, 2, 1])
-                        with col1:
-                            st.caption("Circle Transaction ID")
-                            st.code(pmt["circle_transaction_id"], language=None)
-                        with col2:
-                            st.caption("Amount · Status")
-                            state_icon = "✅" if pmt["state"] == "CONFIRMED" else "⏳"
-                            st.write(f"**{pmt['amount_usdc']} USDC** {state_icon} {pmt['state']}")
-                            if pmt.get("tx_hash"):
-                                st.caption(f"On-chain: `{pmt['tx_hash']}`")
-                                st.link_button(
-                                    "View on Arc Explorer",
-                                    f"{settings.arc_explorer_url}/tx/{pmt['tx_hash']}",
-                                )
-                        with col3:
-                            st.caption("Check status")
-                            if st.button("🔄 Refresh", key=f"refresh_{pmt['circle_transaction_id']}"):
-                                try:
-                                    status = api_request(
-                                        "GET",
-                                        f"/payments/{pmt['circle_transaction_id']}",
-                                        None,
-                                        mode,
-                                        api_base_url,
-                                    )
-                                    updated_state = status.get("state", pmt["state"])
-                                    updated_hash = status.get("tx_hash") or pmt.get("tx_hash")
-                                    # Patch the run's payment record in session state
-                                    for p in st.session_state.last_run["payments"]:
-                                        if p["circle_transaction_id"] == pmt["circle_transaction_id"]:
-                                            p["state"] = updated_state
-                                            if updated_hash:
-                                                p["tx_hash"] = updated_hash
-                                                if updated_hash not in st.session_state.last_run.get("transaction_hashes", []):
-                                                    st.session_state.last_run.setdefault("transaction_hashes", []).append(updated_hash)
-                                    st.rerun()
-                                except Exception as exc:
-                                    st.error(str(exc))
-            elif tx_hashes:
-                # Fallback: just show raw tx hashes (legacy path)
-                for tx in tx_hashes:
-                    col1, col2 = st.columns([4, 1])
+        # Payments
+        payments = result.get("payments", [])
+        if payments:
+            st.subheader(f"💳 Payments ({len(payments)})")
+            for i, payment in enumerate(payments, 1):
+                with st.expander(f"Payment {i}: {payment.get('task_id')}"):
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.code(tx, language=None)
+                        st.metric("Amount", f"{payment.get('amount_usdc')} USDC")
                     with col2:
-                        st.link_button("Explorer", f"{settings.arc_explorer_url}/tx/{tx}")
-        else:
-            st.info(
-                "No payment records returned — this happens when Circle keys are missing "
-                "or the flow ran in stub mode."
-            )
+                        st.metric("State", payment.get('state'))
+                    with col3:
+                        st.metric("Transaction", payment.get('circle_transaction_id', 'N/A')[:20])
+                    with col4:
+                        st.metric("TX Hash", payment.get('tx_hash', 'N/A')[:20])
 
-        failed = run.get("failed_tasks") or []
-        if failed:
-            st.warning(f"Failed tasks: {', '.join(failed)}")
+        # Transaction Hashes
+        tx_hashes = result.get("transaction_hashes", [])
+        if tx_hashes:
+            st.subheader(f"🔗 On-Chain Transactions ({len(tx_hashes)})")
+            for tx_hash in tx_hashes:
+                st.code(tx_hash)
 
-        if run.get("pending_question"):
-            st.info(f"Clarification needed: **{run['pending_question']}**")
-            with st.form("resume"):
-                answer_text = st.text_input("Your answer")
-                if st.form_submit_button("Resume flow"):
-                    try:
-                        data = api_request(
-                            "POST",
-                            "/resume",
-                            {"thread_id": run["thread_id"], "answer": answer_text},
-                            mode,
-                            api_base_url,
-                        )
-                        st.session_state.last_run = data
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
+        # Debug Info
+        with st.expander("🔍 Debug Info"):
+            st.json({
+                "thread_id": result.get("thread_id"),
+                "pending_question": result.get("pending_question"),
+                "failed_tasks": result.get("failed_tasks", [])
+            })
 
 
-if __name__ == "__main__":
-    main()
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+st.sidebar.title("📋 Session Info")
+
+if st.session_state.current_user:
+    st.sidebar.success(f"👤 User: {st.session_state.current_user['display_name']}")
+else:
+    st.sidebar.info("No user registered yet")
+
+if st.session_state.current_buyer:
+    st.sidebar.success(f"👤 Buyer: {st.session_state.current_buyer['name']}")
+else:
+    st.sidebar.info("No buyer agent created yet")
+
+if st.session_state.current_seller:
+    st.sidebar.success(f"🔬 Seller: {st.session_state.current_seller['name']}")
+else:
+    st.sidebar.info("No research agent created yet")
+
+st.sidebar.divider()
+
+if st.sidebar.button("🔄 Reset All", use_container_width=True):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    init_session_state()
+    st.rerun()
+
+st.sidebar.info("""
+**Flow:**
+1. Register user
+2. Create buyer & seller
+3. Fund buyer wallet
+4. Submit research query
+5. View results & payments
+""")
