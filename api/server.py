@@ -82,10 +82,13 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
 
     # Fall back to stub wallet if Circle failed or is disabled
     if not wallet:
+        import secrets
         wallet_id = str(uuid.uuid4())
+        # Generate proper 40-character hex address (0x + 40 hex = 42 total)
+        address = "0x" + secrets.token_hex(20)  # 20 bytes = 40 hex chars
         wallet = CircleProvisionedWallet(
             circle_wallet_id=wallet_id,
-            address=f"0x{uuid.uuid4().hex[:40]}",
+            address=address,
             wallet_set_id="stub-wallet-set",
             blockchain=settings.arc_blockchain,
             account_type=settings.circle_account_type,
