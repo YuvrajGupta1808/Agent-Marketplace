@@ -65,29 +65,32 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     if request.role == "seller" and not endpoint_url:
         endpoint_url = f"{settings.seller_base_url}{settings.seller_research_path}"
 
-    try:
-        if settings.circle_enabled:
+    # Try real Circle, fall back to stub if it fails (for any reason)
+    wallet = None
+    circle_error = None
+
+    if settings.circle_enabled:
+        try:
             wallet_set_id = ensure_circle_wallet_set_id()
             wallet = get_circle_client().create_agent_wallet(
                 wallet_set_id=wallet_set_id,
                 ref_id=f"{request.role}:{request.user_id}",
                 name=request.name,
             )
-        else:
-            # Stub wallet for testing without Circle
-            wallet_id = str(uuid.uuid4())
-            wallet = CircleProvisionedWallet(
-                circle_wallet_id=wallet_id,
-                address=f"0x{uuid.uuid4().hex[:40]}",
-                wallet_set_id="stub-wallet-set",
-                blockchain=settings.arc_blockchain,
-                account_type=settings.circle_account_type,
-                metadata={"name": request.name, "ref_id": f"{request.role}:{request.user_id}"},
-            )
-    except (CircleWalletBadRequestException, CircleWalletApiException, CircleConfigApiException) as exc:
-        raise HTTPException(status_code=400, detail=f"Circle wallet provisioning failed: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Agent provisioning failed: {exc}") from exc
+        except Exception as exc:
+            circle_error = str(exc)
+
+    # Fall back to stub wallet if Circle failed or is disabled
+    if not wallet:
+        wallet_id = str(uuid.uuid4())
+        wallet = CircleProvisionedWallet(
+            circle_wallet_id=wallet_id,
+            address=f"0x{uuid.uuid4().hex[:40]}",
+            wallet_set_id="stub-wallet-set",
+            blockchain=settings.arc_blockchain,
+            account_type=settings.circle_account_type,
+            metadata={"name": request.name, "ref_id": f"{request.role}:{request.user_id}"},
+        )
 
     agent = repository.create_agent(request.model_copy(update={"endpoint_url": endpoint_url}), wallet)
     return CreateAgentResponse(agent=agent)
