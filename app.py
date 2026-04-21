@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 from unittest.mock import patch
 
 import httpx
 import streamlit as st
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
+
+# Load .env file before importing config
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 from api.server import app as api_app
 from seller_agent.server import app as seller_app
 from shared.config import get_settings
+
+# Clear cached settings to ensure fresh load from .env
+get_settings.cache_clear()
 
 st.set_page_config(
     page_title="Agent Marketplace",
