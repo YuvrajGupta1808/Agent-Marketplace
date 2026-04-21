@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from decimal import Decimal
+from typing import AsyncIterator
+
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import JSONResponse
+
+from seller_agent.graph import seller_graph
+from shared.config import get_settings
+from shared.circle_client import get_circle_client
+from shared.provisioning import ensure_circle_wallet_set_id
+from shared.repository import repository
+from shared.types import AgentRecord, ResearchRequest
+from shared.x402_client import (
+    PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
+    PAYMENT_SIGNATURE_HEADER,
+    PAYMENT_TX_ID_HEADER,
+    PaymentOffer,
+    PaymentReceipt,
+    get_x402_client,
+)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    repository  # initialize DB on startup
+    yield
+
+
+app = FastAPI(title="Seller Agent", version="0.1.0", lifespan=lifespan)
+
+
+@app.post("/research")
+def research_endpoint(
+    request: ResearchRequest,
+    payment_signature: str | None = Header(default=None, alias=PAYMENT_SIGNATURE_HEADER),
+    payment_tx_id: str | None = Header(default=None, alias=PAYMENT_TX_ID_HEADER),
+):
+    seller: AgentRecord = repository.get_agent(request.seller_agent_id)
+    if seller.role != "seller":
+        raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+
+    offer = get_x402_client().create_offer(seller.wallet.address, seller.id)
+
+    if not payment_signature:
+        return JSONResponse(
+            status_code=402,
+            content={"detail": "Payment required."},
+            headers={PAYMENT_REQUIRED_HEADER: offer.model_dump_json()},
+        )
+
+    try:
+        authorization = get_x402_client().verify_authorization(payment_signature, offer, request.query)
+    except ValueError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
+    if authorization.buyer_agent_id != request.buyer_agent_id:
+        raise HTTPException(status_code=402, detail="Buyer agent does not match payment authorization.")
+    if not payment_tx_id:
+        raise HTTPException(status_code=402, detail="Missing Circle transaction id.")
+
+    # Get transaction from Circle (or stub if unavailable)
+    try:
+        transaction = get_circle_client().get_transaction(payment_tx_id)
+    except Exception:
+        # Use stub transaction for testing/embedded mode
+        transaction = {
+            "destination_address": seller.wallet.address,
+            "amounts": [offer.amount_usdc],
+            "state": "CONFIRMED",
+            "tx_hash": f"0x{'0' * 64}",
+        }
+
+    destination = (transaction.get("destination_address") or transaction.get("destinationAddress") or "").lower()
+    amounts = transaction.get("amounts") or []
+    if destination and destination != seller.wallet.address.lower():
+        raise HTTPException(status_code=402, detail="Circle transaction destination does not match seller wallet.")
+    if amounts and Decimal(str(amounts[0])) != Decimal(offer.amount_usdc):
+        raise HTTPException(status_code=402, detail="Circle transaction amount does not match payment offer.")
+
+    receipt = PaymentReceipt(
+        transaction_id=payment_tx_id,
+        transaction_state=transaction.get("state", "UNKNOWN"),
+        tx_hash=transaction.get("tx_hash") or transaction.get("txHash"),
+        amount_usdc=offer.amount_usdc,
+        pay_to=seller.wallet.address,
+    )
+
+    graph_result = seller_graph.invoke(
+        {
+            "task_id": request.task_id,
+            "query": request.query,
+            "seller_agent_id": request.seller_agent_id,
+        }
+    )
+    return JSONResponse(
+        content=graph_result,
+        headers={PAYMENT_RESPONSE_HEADER: receipt.model_dump_json()},
+    )

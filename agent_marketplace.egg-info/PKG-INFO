@@ -1,0 +1,324 @@
+Metadata-Version: 2.4
+Name: agent-marketplace
+Version: 0.1.0
+Summary: Agentic marketplace MVP scaffold for Arc Testnet
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.115
+Requires-Dist: httpx>=0.28
+Requires-Dist: langgraph>=1.1.0
+Requires-Dist: openai>=2.0.0
+Requires-Dist: pydantic>=2.12
+Requires-Dist: pydantic-settings>=2.13
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: rich>=13.9
+Requires-Dist: streamlit>=1.44
+Requires-Dist: tenacity>=8.5
+Requires-Dist: uvicorn>=0.30
+Provides-Extra: arc
+Requires-Dist: circle-developer-controlled-wallets>=9.0.0; extra == "arc"
+Requires-Dist: eth-account>=0.13; extra == "arc"
+Requires-Dist: titanoboa>=0.2.6; extra == "arc"
+Requires-Dist: web3>=7.0.0; extra == "arc"
+
+# Agentic Marketplace — Buyer + Seller MVP
+
+## Context
+Building for the Nano Payments Arc hackathon (lablab.ai). Deadline: April 25 online submission, April 26 live demo SF. Prize: $10K total. Judging criteria require ≥50 on-chain transactions, ≤$0.01 per action, and a clear explanation of why traditional gas costs would make this unviable. Today is April 20 — 5 days to build.
+
+The codebase is empty. **LangGraph is the primary orchestration framework throughout** — not just for the Buyer, but as the entire autonomous backbone. One top-level Orchestrator graph plans tasks, dispatches to a Buyer Agent subgraph in parallel (via `Send`), asks the user clarifying questions mid-execution (via `interrupt()`), and streams a live-updating answer as each result arrives.
+
+---
+
+## Framework Decision
+- **Orchestrator:** LangGraph `StateGraph` (Featherless — `meta-llama/Llama-3.3-70B-Instruct`) — plan, fan-out dispatch, question/answer, synthesis
+- **Buyer Agent:** LangGraph `StateGraph` subgraph — autonomous payment loop per task
+- **Seller Agent:** FastAPI server with its own internal LangGraph research pipeline (Featherless — `meta-llama/Llama-3.1-8B-Instruct`)
+- **Payments:** Circle Programmable Wallets (one wallet per agent) + x402 standard
+- **LLM SDK:** `openai` Python SDK with `base_url="https://api.featherless.ai/v1"` (Featherless is OpenAI-compatible)
+
+---
+
+## Project Structure
+
+```
+Agent-Marketplace/
+├── .env / .env.example
+├── pyproject.toml
+├── shared/
+│   ├── config.py             # pydantic-settings: all env vars
+│   ├── agent_wallet.py       # AgentWallet class: Circle SDK wrapper (buyer + seller)
+│   ├── wallet_setup.py       # One-shot: create wallet set + 2 wallets → writes to .env
+│   ├── x402_client.py        # CircleSignerAdapter for x402 EVM signing
+│   ├── registry.py           # ServiceRegistry: thread-safe in-memory discovery
+│   └── types.py              # Shared Pydantic models: TaskSpec, ResearchResult
+├── orchestrator/
+│   ├── state.py              # OrchestratorState TypedDict (with operator.add reducers)
+│   ├── graph.py              # Top-level StateGraph: plan→dispatch→synthesize
+│   ├── nodes/
+│   │   ├── planner.py        # plan_tasks: Gemini LLM → list[TaskSpec]
+│   │   ├── dispatcher.py     # build_dispatch_sends: returns [Send("buyer_agent_node", ...)]
+│   │   ├── clarifier.py      # ask_clarification: interrupt() for mid-graph user Q&A
+│   │   └── synthesizer.py    # synthesize_answer: rolling synthesis after each result
+│   └── prompts.py
+├── buyer_agent/
+│   ├── state.py              # BuyerState TypedDict
+│   ├── graph.py              # BuyerGraph compiled subgraph
+│   ├── wallet.py             # BuyerWallet(AgentWallet) — loads BUYER_WALLET_ID, asserts funded
+│   └── nodes/
+│       ├── discover.py       # discover_seller: ServiceRegistry lookup
+│       ├── pay.py            # execute_payment: x402 402→pay→verify cycle
+│       └── fetch_result.py   # fetch_result: call seller with receipt, return ResearchResult
+├── seller_agent/
+│   ├── server.py             # FastAPI + x402 middleware
+│   ├── graph.py              # SellerGraph: retrieve→research→format (internal)
+│   ├── state.py              # SellerState TypedDict
+│   ├── wallet.py             # SellerWallet(AgentWallet) — loads SELLER_WALLET_ID, registers
+│   └── nodes/
+│       ├── retriever.py      # retrieve_context: web + on-chain data
+│       ├── researcher.py     # run_research: Featherless LLM synthesis (Llama-3.1-8B)
+│       └── formatter.py      # format_response: structure result with citations
+├── contracts/
+│   ├── AgentEscrow.vy
+│   ├── SpendingLimiter.vy
+│   └── deploy.py             # titanoboa deployment to Arc Testnet
+├── api/
+│   └── server.py             # FastAPI gateway: POST /run + POST /resume
+└── demo/
+    └── run_demo.py           # 55 queries → 50+ on-chain txns, Rich console output
+```
+
+---
+
+## Wallet Provisioning (Separate Wallet Per Agent)
+
+`shared/wallet_setup.py` runs **once** at environment setup. It creates **one wallet set** with **two separate wallets** (separate IDs, separate addresses, separate USDC balances):
+
+```python
+wallets_api.create_wallets(CreateWalletsRequest({
+    "walletSetId": wallet_set_id,
+    "blockchains": ["ARC-TESTNET"],
+    "count": 2,          # wallet[0] = buyer, wallet[1] = seller
+    "accountType": "EOA",
+}))
+# Writes BUYER_WALLET_ID, BUYER_WALLET_ADDRESS, SELLER_WALLET_ID, SELLER_WALLET_ADDRESS to .env
+```
+
+`shared/agent_wallet.py` — `AgentWallet` class both agents instantiate with their own wallet_id:
+- `buyer_agent/wallet.py`: `BuyerWallet(AgentWallet)` loads `BUYER_WALLET_ID`, calls `assert_funded(min=1.0)` — fails fast if unfunded
+- `seller_agent/wallet.py`: `SellerWallet(AgentWallet)` loads `SELLER_WALLET_ID`, registers address in `ServiceRegistry` at startup
+
+Signing: Circle developer-controlled wallets sign **server-side via Circle API** (not local private key). `shared/x402_client.py` provides a `CircleSignerAdapter` that wraps `TransactionsApi` for the x402 EVM scheme.
+
+---
+
+## LangGraph Autonomous Architecture
+
+### Orchestrator Graph Topology
+```
+START
+  │
+  ▼
+[plan_tasks]          Gemini LLM: user_goal → list[TaskSpec], writes task_specs
+  │
+  ├─► if pending_question → [ask_clarification] → (user resumes) → back to plan_tasks
+  │
+  ▼
+[dispatcher edge]     build_dispatch_sends() → [Send("buyer_agent_node", task_0), Send(...task_1), ...]
+  │                   (This is an edge function, NOT a node — returns list[Send])
+  │  (parallel fan-out — N tasks run concurrently)
+  ▼
+[buyer_agent_node]    Compiled BuyerGraph invoked N times in parallel
+  │                   Each returns {"results": [ResearchResult]} — operator.add reducer appends
+  ▼
+[synthesize_answer]   Runs after EACH buyer result (streamed via "updates" mode)
+  │                   Writes running_answer; sets final_answer when all results in
+  │
+  ├─► if any result.is_ambiguous → [ask_clarification] → (user resumes) → re-dispatch
+  │
+  ▼
+END
+```
+
+### Key LangGraph Patterns Used
+
+**`Send` API for parallel fan-out** (`orchestrator/nodes/dispatcher.py`):
+```python
+def build_dispatch_sends(state: OrchestratorState) -> list[Send]:
+    return [Send("buyer_agent_node", {"task_id": s.task_id, "query": s.query})
+            for s in state["task_specs"]]
+# Registered as: builder.add_conditional_edges("plan_tasks", build_dispatch_sends, ["buyer_agent_node"])
+```
+
+**`interrupt()` for mid-graph user Q&A** (`orchestrator/nodes/clarifier.py`):
+```python
+def ask_clarification(state: OrchestratorState) -> dict:
+    user_answer = interrupt({"question": state["pending_question"]})  # suspends graph
+    return {"clarification_answer": user_answer, "pending_question": None}
+# Resumed via: graph.invoke(Command(resume=answer), config={"configurable": {"thread_id": tid}})
+```
+
+**`operator.add` reducer** prevents parallel `Send` workers from overwriting each other:
+```python
+class OrchestratorState(TypedDict):
+    results: Annotated[list[ResearchResult], operator.add]   # each Send appends
+    failed_tasks: Annotated[list[str], operator.add]
+    transaction_hashes: Annotated[list[str], operator.add]
+```
+
+**`MemorySaver` checkpointer** — required for `interrupt()` to work (serializes/resumes state):
+```python
+orchestrator_graph = builder.compile(checkpointer=MemorySaver())
+```
+
+**Subgraph-as-node wrapper** (`buyer_agent_node` in orchestrator):
+```python
+def buyer_agent_node(state: dict) -> dict:
+    result = buyer_graph.invoke({"task_id": state["task_id"], "query": state["query"], "retry_count": 0})
+    if result.get("error"):
+        return {"results": [], "failed_tasks": [state["task_id"]]}
+    return {"results": [result["result"]], "failed_tasks": []}
+```
+
+### Buyer Agent Graph Topology
+```
+START → [discover_seller] → [execute_payment] → [fetch_result] → [validate_result] → END
+                            (x402: probe→402→sign→pay→verify)
+```
+
+### Seller Internal Graph Topology
+```
+START → [retrieve_context] → [run_research] → [format_response] → END
+```
+
+---
+
+## x402 Payment Flow (per task)
+
+1. `discover.py` → `ServiceRegistry.discover("research")` → seller endpoint + wallet address
+2. `execute_payment.py`:
+   - `POST /research` with no header → Seller returns **HTTP 402** + `PAYMENT-REQUIRED` header
+   - `x402Client` + `CircleSignerAdapter` builds signed `PaymentPayload` (EIP-3009 `TransferWithAuthorization` on Arc chain `eip155:5042002`)
+   - Retry `POST /research` with `PAYMENT-SIGNATURE` header → Circle transfer executes on Arc Testnet
+   - Response includes `PAYMENT-RESPONSE` header with `tx_hash`
+3. `fetch_result.py` → parses response JSON + tx_hash → `ResearchResult`
+
+Pricing: `SELLER_PRICE_USDC=0.001` ($0.001/query) — 10× under $0.01 limit. 55 queries = $0.055 total.
+
+---
+
+## Vyper Smart Contracts
+
+- **`AgentEscrow.vy`**: `create_escrow(seller, amount, timeout, id)` / `release(id, service_tx_hash)` / `refund(id)` — locks USDC, releases on buyer confirmation
+- **`SpendingLimiter.vy`**: `set_limits(agent, per_tx, daily)` / `check_and_record_spend(agent, amount)` — rolling 24h window, per-tx cap
+
+Deployed via `titanoboa`:
+```python
+env = NetworkEnv(ARC_RPC_URL)
+env.add_account(Account.from_key(DEPLOYER_PRIVATE_KEY), force_eoa=True)
+boa.set_env(env)
+spending_limiter = boa.load("contracts/SpendingLimiter.vy")
+agent_escrow = boa.load("contracts/AgentEscrow.vy", USDC_ADDRESS)
+```
+
+---
+
+## Arc L1 Testnet Config
+| Parameter | Value |
+|-----------|-------|
+| Chain ID | `5042002` |
+| RPC | `https://rpc.testnet.arc.network` |
+| USDC Contract | `0x3600000000000000000000000000000000000000` |
+| Gas token | USDC (not ETH) |
+| Explorer | `https://testnet.arcscan.app` |
+| Faucet | `https://faucet.circle.com` |
+
+---
+
+## Already Installed
+`langgraph 1.0.7`, `fastapi 0.115.0`, `httpx 0.28.1`, `uvicorn 0.44.0`, `pydantic 2.12.5`, `python-dotenv 1.0.0`, `cryptography 46.0.3`, `aiohttp 3.13.1`
+
+## Packages to Install
+```
+pip install openai langchain-core langchain-openai circle-developer-controlled-wallets \
+    "x402[fastapi,httpx,evm]" eth-account web3 titanoboa tenacity rich pydantic-settings \
+    langgraph-checkpoint-sqlite
+```
+
+## Featherless LLM Client Pattern
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["FEATHERLESS_API_KEY"],
+    base_url="https://api.featherless.ai/v1",
+)
+
+# Orchestrator — strong reasoning model
+ORCHESTRATOR_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+
+# Seller research — fast, efficient model
+SELLER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+
+# Usage (same as OpenAI SDK):
+response = client.chat.completions.create(
+    model=ORCHESTRATOR_MODEL,
+    messages=[{"role": "user", "content": "..."}],
+)
+```
+
+For LangChain nodes, use `langchain-openai` with custom base_url:
+```python
+from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="meta-llama/Llama-3.3-70B-Instruct",
+    api_key=os.environ["FEATHERLESS_API_KEY"],
+    base_url="https://api.featherless.ai/v1",
+)
+```
+
+---
+
+## Setup Sequence
+1. `pip install` missing packages
+2. Copy `.env.example` → `.env`, add `CIRCLE_API_KEY`, `CIRCLE_ENTITY_SECRET`, `FEATHERLESS_API_KEY`
+3. `python -m shared.wallet_setup` → creates 2 wallets, writes IDs to `.env`
+4. Fund **buyer wallet** from `https://faucet.circle.com` (~1.0 USDC for demo)
+5. `python -m contracts.deploy` → paste contract addresses into `.env`
+6. Terminal 1: `uvicorn seller_agent.server:app --port 8001`
+7. Terminal 2: `uvicorn api.server:app --port 8000`
+8. `python -m demo.run_demo` → 55 queries, streams 50+ tx hashes
+
+---
+
+## Demo Execution Trace (what the judges see)
+1. User submits: `"Research the top 3 DeFi protocols on Arc"`
+2. Orchestrator plans → 3 `TaskSpec` objects
+3. `build_dispatch_sends` fires → 3 parallel `buyer_agent_node` invocations
+4. Each Buyer: discover → 402 → pay (Arc USDC transfer) → verify → result
+5. As each result arrives → `synthesize_answer` updates `running_answer` (streamed live)
+6. If ambiguous result → `interrupt()` asks user → user answers → re-dispatches
+7. Final `final_answer` synthesized and returned
+
+For 50+ tx demo: `run_demo.py` submits 55 single-query goals in sequence, each triggering one on-chain payment.
+
+---
+
+## 5-Day Build Schedule
+| Day | Goal |
+|-----|------|
+| Apr 20 (today) | `shared/` layer — config, AgentWallet, wallet_setup, registry, types |
+| Apr 21 | `seller_agent/` — FastAPI x402 server, internal research LangGraph, SellerWallet |
+| Apr 22 | `buyer_agent/` + `orchestrator/` — both LangGraph graphs, Send/interrupt wiring |
+| Apr 23 | `contracts/` — Vyper contracts, titanoboa deploy to Arc Testnet |
+| Apr 24 | `api/server.py` + `demo/run_demo.py` — end-to-end 55 queries, ≥50 tx verified |
+
+---
+
+## Verification
+- **Wallets provisioned:** `python -m shared.wallet_setup` prints 2 distinct addresses
+- **Seller live:** `curl http://localhost:8001/research -X POST -d '{"query":"test"}'` → HTTP 402
+- **Single flow:** `python -c "from orchestrator.graph import orchestrator_graph; import asyncio; asyncio.run(orchestrator_graph.ainvoke({'user_goal':'What is Arc?', 'thread_id':'t1'}))"` → returns final_answer + tx_hash
+- **Full demo:** `python -m demo.run_demo` → Rich table with ≥50 green checkmarks, each with Arc tx hash
+- **On-chain:** Paste any tx hash into `https://testnet.arcscan.app` → confirms USDC buyer→seller transfer

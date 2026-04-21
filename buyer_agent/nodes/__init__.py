@@ -1,0 +1,2 @@
+"""Buyer agent nodes."""
+

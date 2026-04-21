@@ -1,0 +1,45 @@
+[project]
+name = "agent-marketplace"
+version = "0.1.0"
+description = "Agentic marketplace MVP scaffold for Arc Testnet"
+readme = "PLAN.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "httpx>=0.28",
+  "langgraph>=1.1.0",
+  "openai>=2.0.0",
+  "pydantic>=2.12",
+  "pydantic-settings>=2.13",
+  "python-dotenv>=1.0",
+  "rich>=13.9",
+  "streamlit>=1.44",
+  "tenacity>=8.5",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+arc = [
+  "circle-developer-controlled-wallets>=9.0.0",
+  "eth-account>=0.13",
+  "titanoboa>=0.2.6",
+  "web3>=7.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+  "api",
+  "buyer_agent",
+  "buyer_agent.nodes",
+  "contracts",
+  "demo",
+  "orchestrator",
+  "orchestrator.nodes",
+  "seller_agent",
+  "seller_agent.nodes",
+  "shared",
+]
