@@ -269,6 +269,44 @@ llm = ChatOpenAI(
 
 ---
 
+## Embedded Testing Mode (No Circle SDK Required)
+
+For rapid iteration and testing **without Circle API credentials or SDK**:
+
+```bash
+# Set empty Circle credentials to enable stub mode
+export CIRCLE_API_KEY=""
+export CIRCLE_ENTITY_SECRET=""
+
+# Run embedded test (everything in-process via TestClient)
+python test_embedded.py
+```
+
+**What happens in embedded mode:**
+- Stub wallets created automatically (no Circle API needed)
+- Stub payments signed with mock signatures
+- Buyer → Seller communication via TestClient (no HTTP server needed)
+- Full flow: planner → dispatcher → buyer → seller → synthesizer
+- All payments confirmed immediately with stub transaction IDs
+
+**Benefits:**
+- Fast iteration during development (no external services)
+- No Circle SDK installation required
+- No `.env` file needed
+- Full marketplace flow in < 3 seconds
+- Includes payment details, final answer synthesis, transaction logging
+
+**Output:**
+```
+✅ SUCCESS! Marketplace execution completed.
+  - Stub wallets created for buyer and seller
+  - 2 research tasks executed with 2 payments
+  - Each payment: 0.001000 USDC, CONFIRMED state
+  - Final answer synthesized from all results
+```
+
+---
+
 ## Demo Execution Trace (what the judges see)
 1. User submits: `"Research the top 3 DeFi protocols on Arc"`
 2. Orchestrator plans → 3 `TaskSpec` objects
