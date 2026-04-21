@@ -148,15 +148,25 @@ def run_marketplace(request: RunRequest) -> RunResponse:
     payments = result.get("payments", [])
     tx_hashes = result.get("transaction_hashes", [])
     settings = get_settings()
+
+    # Convert PaymentRecord objects to dicts if needed, then poll for updates
     if payments and settings.circle_enabled:
+        payment_dicts = []
         for pmt in payments:
-            if pmt.get("circle_transaction_id") and not pmt.get("tx_hash"):
-                tx_hash, state = _poll_payment_status(pmt["circle_transaction_id"])
+            # Convert Pydantic model to dict if needed
+            pmt_dict = pmt.model_dump() if hasattr(pmt, 'model_dump') else dict(pmt)
+
+            # Poll for transaction status
+            if pmt_dict.get("circle_transaction_id") and not pmt_dict.get("tx_hash"):
+                tx_hash, state = _poll_payment_status(pmt_dict["circle_transaction_id"])
                 if tx_hash:
-                    pmt["tx_hash"] = tx_hash
+                    pmt_dict["tx_hash"] = tx_hash
                     if tx_hash not in tx_hashes:
                         tx_hashes.append(tx_hash)
-                pmt["state"] = state
+                pmt_dict["state"] = state
+
+            payment_dicts.append(pmt_dict)
+        payments = payment_dicts
 
     return RunResponse(
         thread_id=request.thread_id,
