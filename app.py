@@ -227,35 +227,64 @@ with tab3:
         buyer = st.session_state.current_buyer
         wallet_addr = buyer["wallet"]["address"]
 
+        settings = get_settings()
+
         st.info(f"""
         **Buyer Wallet to Fund:**
         - Address: `{wallet_addr}`
-        - Current Status: Stub wallet (demo mode)
-
-        **In production with real Circle:**
-        1. Visit: https://faucet.circle.com
-        2. Enter wallet address: `{wallet_addr}`
-        3. Request USDC tokens
-        4. Check funding status below
+        - Network: Arc Testnet (chain 5042002)
         """)
 
-        col1, col2 = st.columns(2)
+        if settings.circle_enabled:
+            st.warning("""
+            **Real Circle Mode:**
+            1. Visit: https://faucet.circle.com
+            2. Select "Arc Testnet"
+            3. Enter wallet address: `{wallet_addr}`
+            4. Request USDC tokens
+            5. Wait for confirmation
+            """)
+        else:
+            st.success("""
+            **Demo/Stub Mode (No Real Funding Needed):**
+
+            You're using stub mode - wallets and payments are simulated.
+            Click below to proceed without real funding.
+            """)
+
+        col1, col2, col3 = st.columns([1, 1, 1])
+
         with col1:
             amount_usdc = st.number_input(
-                "Amount to fund (USDC)",
+                "Amount (USDC)",
                 min_value=0.001,
                 value=10.0,
-                step=0.1
+                step=1.0
             )
 
         with col2:
-            if st.button("✅ Confirm Funded", key="btn_confirm_funded", use_container_width=True):
+            if settings.circle_enabled:
+                if st.button("🔍 Check Funding", key="btn_check_funding", use_container_width=True):
+                    st.info("In real mode, would query Circle API...")
+                    st.warning("Circle SDK unavailable - using stub mode")
+            else:
+                if st.button("✅ Proceed (Stub)", key="btn_auto_fund", use_container_width=True):
+                    st.session_state.buyer_wallet_funded = True
+                    st.rerun()
+
+        with col3:
+            if st.button("⏭️ Skip & Continue", key="btn_skip_funding", use_container_width=True):
                 st.session_state.buyer_wallet_funded = True
-                st.success(f"💰 Wallet funded with {amount_usdc} USDC (demo mode)")
                 st.rerun()
 
         if st.session_state.buyer_wallet_funded:
-            st.success(f"✅ Wallet is ready with {amount_usdc} USDC")
+            st.success(f"""
+            ✅ **Wallet Ready**
+            - Address: `{wallet_addr}`
+            - Balance: {amount_usdc} USDC (configured)
+            - Mode: {'Circle' if settings.circle_enabled else 'Stub/Demo'}
+            - Ready for research payments ✓
+            """)
 
 
 # ── TAB 4: Plan & Pay ─────────────────────────────────────────────────────────
