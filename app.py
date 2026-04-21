@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from unittest.mock import patch
 
 import httpx
@@ -46,13 +45,22 @@ init_session_state()
 class SellerProxy:
     def __init__(self, *_: Any, **__: Any) -> None:
         self._inner = TestClient(seller_app)
+        self.timeout = None
 
-    def __enter__(self) -> TestClient:
-        self._inner.__enter__()
-        return self._inner
+    def __enter__(self):
+        return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
-        return self._inner.__exit__(exc_type, exc, tb)
+        return False
+
+    def post(self, url: str, **kwargs):
+        """Intercept POST requests and redirect to seller TestClient."""
+        if "://" in url:
+            path = url.split("://", 1)[1].split("/", 1)[1]
+            path = "/" + path
+        else:
+            path = url
+        return self._inner.post(path, **kwargs)
 
     def post(self, url: str, **kwargs):
         if "://" in url:
@@ -63,21 +71,15 @@ class SellerProxy:
         return self._inner.post(path, **kwargs)
 
 
-@contextmanager
-def embedded_client() -> Iterator[TestClient]:
-    with patch("httpx.Client", SellerProxy):
-        with TestClient(api_app, raise_server_exceptions=False) as client:
-            yield client
-
-
 def api_request(
     method: str,
     path: str,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Make API request using embedded mode."""
-    with embedded_client() as client:
-        response = client.request(method, path, json=payload)
+    """Make API request using embedded mode (Streamlit)."""
+    with patch("httpx.Client", SellerProxy):
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            response = client.request(method, path, json=payload)
 
     if response.status_code >= 400:
         try:
