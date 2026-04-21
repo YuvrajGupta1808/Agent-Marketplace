@@ -41,6 +41,7 @@ shared/config.py
 shared/database.py
 shared/envfile.py
 shared/provisioning.py
+shared/register_entity_secret.py
 shared/repository.py
 shared/types.py
 shared/wallet_setup.py

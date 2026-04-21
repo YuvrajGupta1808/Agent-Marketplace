@@ -65,35 +65,23 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     if request.role == "seller" and not endpoint_url:
         endpoint_url = f"{settings.seller_base_url}{settings.seller_research_path}"
 
-    # Try real Circle, fall back to stub if it fails (for any reason)
-    wallet = None
-    circle_error = None
+    # Use real Circle wallets
+    if not settings.circle_enabled:
+        raise HTTPException(status_code=400, detail="Circle credentials not configured. Set CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET in .env")
 
-    if settings.circle_enabled:
-        try:
-            wallet_set_id = ensure_circle_wallet_set_id()
-            wallet = get_circle_client().create_agent_wallet(
-                wallet_set_id=wallet_set_id,
-                ref_id=f"{request.role}:{request.user_id}",
-                name=request.name,
-            )
-        except Exception as exc:
-            circle_error = str(exc)
-
-    # Fall back to stub wallet if Circle failed or is disabled
-    if not wallet:
-        import secrets
-        wallet_id = str(uuid.uuid4())
-        # Generate proper 40-character hex address (0x + 40 hex = 42 total)
-        address = "0x" + secrets.token_hex(20)  # 20 bytes = 40 hex chars
-        wallet = CircleProvisionedWallet(
-            circle_wallet_id=wallet_id,
-            address=address,
-            wallet_set_id="stub-wallet-set",
-            blockchain=settings.arc_blockchain,
-            account_type=settings.circle_account_type,
-            metadata={"name": request.name, "ref_id": f"{request.role}:{request.user_id}"},
+    try:
+        wallet_set_id = ensure_circle_wallet_set_id()
+        wallet = get_circle_client().create_agent_wallet(
+            wallet_set_id=wallet_set_id,
+            ref_id=f"{request.role}:{request.user_id}",
+            name=request.name,
         )
+    except (CircleWalletBadRequestException, CircleWalletApiException, CircleConfigApiException) as exc:
+        raise HTTPException(status_code=400, detail=f"Circle wallet creation failed: {exc}") from exc
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Wallet provisioning failed: {type(exc).__name__}: {str(exc)}") from exc
 
     agent = repository.create_agent(request.model_copy(update={"endpoint_url": endpoint_url}), wallet)
     return CreateAgentResponse(agent=agent)

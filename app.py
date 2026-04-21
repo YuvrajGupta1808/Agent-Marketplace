@@ -230,19 +230,31 @@ with tab3:
         settings = get_settings()
 
         st.info(f"""
-        **Buyer Wallet to Fund:**
-        - Address: `{wallet_addr}`
-        - Network: Arc Testnet (chain 5042002)
+        **Circle Wallet Details:**
+        - Network: Arc Testnet (Chain 5042002)
+        - Wallet Address: `{wallet_addr}`
+        - Circle Wallet ID: `{buyer['wallet']['circle_wallet_id']}`
+        - Account Type: {buyer['wallet']['account_type']}
+        - Blockchain: {buyer['wallet']['blockchain']}
         """)
 
         if settings.circle_enabled:
-            st.warning("""
-            **Real Circle Mode:**
-            1. Visit: https://faucet.circle.com
-            2. Select "Arc Testnet"
-            3. Enter wallet address: `{wallet_addr}`
-            4. Request USDC tokens
+            st.success("""
+            ✅ **REAL CIRCLE MODE ACTIVE**
+
+            This wallet is created on Circle Programmable Wallets.
+
+            **To fund this wallet:**
+            1. Open: https://faucet.circle.com
+            2. Select Network: **Arc Testnet**
+            3. Paste wallet address
+            4. Request 10+ USDC
             5. Wait for confirmation
+
+            **After funding:**
+            - Your research queries will execute real payments
+            - Transactions will be on Arc Testnet blockchain
+            - Check explorer: https://testnet.arcscan.app
             """)
         else:
             st.success("""
@@ -264,9 +276,8 @@ with tab3:
 
         with col2:
             if settings.circle_enabled:
-                if st.button("🔍 Check Funding", key="btn_check_funding", use_container_width=True):
-                    st.info("In real mode, would query Circle API...")
-                    st.warning("Circle SDK unavailable - using stub mode")
+                if st.button("💳 Open Faucet", key="btn_open_faucet", use_container_width=True):
+                    st.info("🔗 Open in browser: https://faucet.circle.com")
             else:
                 if st.button("✅ Proceed (Stub)", key="btn_auto_fund", use_container_width=True):
                     st.session_state.buyer_wallet_funded = True
@@ -278,13 +289,22 @@ with tab3:
                 st.rerun()
 
         if st.session_state.buyer_wallet_funded:
-            st.success(f"""
-            ✅ **Wallet Ready**
-            - Address: `{wallet_addr}`
-            - Balance: {amount_usdc} USDC (configured)
-            - Mode: {'Circle' if settings.circle_enabled else 'Stub/Demo'}
-            - Ready for research payments ✓
-            """)
+            if settings.circle_enabled:
+                st.success(f"""
+                ✅ **Circle Wallet Configured**
+                - Address: `{wallet_addr}`
+                - Status: Ready for funding via faucet
+                - Network: Arc Testnet
+                - Next: Fund via Circle faucet, then proceed to research
+                """)
+            else:
+                st.success(f"""
+                ✅ **Wallet Ready (Stub Mode)**
+                - Address: `{wallet_addr}`
+                - Balance: {amount_usdc} USDC (simulated)
+                - Mode: Demo
+                - Ready for research payments ✓
+                """)
 
 
 # ── TAB 4: Plan & Pay ─────────────────────────────────────────────────────────
