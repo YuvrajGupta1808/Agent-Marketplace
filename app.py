@@ -27,6 +27,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Global API Client (reused across requests) ──────────────────────────────
+
+@st.cache_resource
+def get_api_client():
+    """Create and cache a single API client for all requests."""
+    with patch("httpx.Client", SellerProxy):
+        return TestClient(api_app, raise_server_exceptions=False)
+
 # ── Session State Initialization ──────────────────────────────────────────────
 
 def init_session_state():
@@ -76,10 +84,9 @@ def api_request(
     path: str,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Make API request using embedded mode (Streamlit)."""
-    with patch("httpx.Client", SellerProxy):
-        with TestClient(api_app, raise_server_exceptions=False) as client:
-            response = client.request(method, path, json=payload)
+    """Make API request using cached embedded client."""
+    client = get_api_client()
+    response = client.request(method, path, json=payload)
 
     if response.status_code >= 400:
         try:
