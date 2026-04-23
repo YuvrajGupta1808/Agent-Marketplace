@@ -1,10 +1,41 @@
+# Environment files
 .env
+.env.*
+!.env.example
+
+# Python virtual environments and caches
 .venv/
+venv/
+venv312/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 *.pyc
-data/
-output/
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+
+# JavaScript/TypeScript dependencies and build output
+node_modules/
+.next/
 dist/
 build/
+coverage/
+*.tsbuildinfo
+
+# Runtime/generated project artifacts
+data/
+output/
+*.log
+
+# OS/editor noise
+.DS_Store
+
+# Local tooling folders
+.cursor/
+.claude/
+.vscode/
+
+agent_marketplace.egg-info/
