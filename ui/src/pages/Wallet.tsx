@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Copy, ExternalLink, PenTool, Wallet as WalletIcon } from "lucide-react";
 import { useAppState } from "../lib/app-state";
-import { getTransactions, type Transaction } from "../lib/api";
+import { getTransactions, pollPendingTransactions, type Transaction } from "../lib/api";
 
 const ARC_EXPLORER_BASE_URL = "https://testnet.arcscan.app";
 
@@ -16,20 +16,29 @@ export function Wallet() {
   const [copied, setCopied] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
+  const [polling, setPolling] = useState(false);
 
-  const payments = latestRun?.payments ?? [];
+  // Real-time payment snapshot from transactions instead of latestRun
   const paymentTotal = useMemo(
-    () => payments.reduce((sum, payment) => sum + Number(payment.amount_usdc || 0), 0),
-    [payments],
+    () => transactions.reduce((sum, tx) => sum + Number(tx.amount_usdc || 0), 0),
+    [transactions],
   );
-  const latestPayment = payments[0] ?? null;
+  const paymentCount = useMemo(
+    () => transactions.filter(tx => tx.state === 'COMPLETE' || tx.state === 'CONFIRMED').length,
+    [transactions],
+  );
+  const latestPayment = transactions.length > 0 ? transactions[0] : null;
 
   useEffect(() => {
     const fetchTransactions = async () => {
       try {
         setIsLoadingTransactions(true);
         const response = await getTransactions();
-        setTransactions(response.transactions || []);
+        // Show all transactions that have been processed (INITIATED, CONFIRMED, or COMPLETE)
+        const confirmed = (response.transactions || []).filter(tx =>
+          tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED"
+        );
+        setTransactions(confirmed);
       } catch (err) {
         console.error("Error fetching transactions:", err);
         setTransactions([]);
@@ -39,6 +48,10 @@ export function Wallet() {
     };
 
     fetchTransactions();
+
+    // Auto-refresh every 5 seconds to catch confirmed transactions
+    const interval = setInterval(fetchTransactions, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   // Refresh transactions when latestRun changes
@@ -47,7 +60,10 @@ export function Wallet() {
       const fetchTransactions = async () => {
         try {
           const response = await getTransactions();
-          setTransactions(response.transactions || []);
+          const confirmed = (response.transactions || []).filter(tx =>
+            tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED"
+          );
+          setTransactions(confirmed);
         } catch (err) {
           console.error("Error fetching transactions:", err);
         }
@@ -64,6 +80,25 @@ export function Wallet() {
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const handlePollCircle = async () => {
+    setPolling(true);
+    try {
+      const result = await pollPendingTransactions();
+      console.log(`📡 Polled Circle: ${result.updated} updated, ${result.total_pending} still pending`);
+      // Refresh transactions after polling
+      const response = await getTransactions();
+      const confirmed = (response.transactions || []).filter(tx =>
+        tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED"
+      );
+      setTransactions(confirmed);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to poll Circle";
+      console.error("Poll failed:", msg);
+    } finally {
+      setPolling(false);
     }
   };
 
@@ -200,19 +235,19 @@ export function Wallet() {
             <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>
                 <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">Total Sent</p>
-                <p className="mt-2 text-3xl font-black uppercase tracking-tight text-white">{paymentTotal.toFixed(3)}</p>
+                <p className="mt-2 text-3xl font-black uppercase tracking-tight text-white">{paymentTotal.toFixed(6)}</p>
                 <p className="mt-1 text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">USDC</p>
               </div>
               <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">Payment Count</p>
-                <p className="mt-2 text-3xl font-black uppercase tracking-tight text-white">{payments.length}</p>
-                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">Recorded</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">Confirmed Payments</p>
+                <p className="mt-2 text-3xl font-black uppercase tracking-tight text-white">{paymentCount}</p>
+                <p className="mt-1 text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">On Chain</p>
               </div>
             </div>
             <div className="mt-6 border-t border-white/20 pt-5">
               <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-400">Latest Transaction</p>
               <p className="mt-2 text-xs font-black uppercase tracking-widest text-white">
-                {latestPayment ? `${latestPayment.state} • ${latestPayment.amount_usdc} USDC` : "No payments recorded yet"}
+                {latestPayment ? `${latestPayment.state} • ${Number(latestPayment.amount_usdc).toFixed(6)} USDC` : "No payments recorded yet"}
               </p>
             </div>
           </div>
@@ -225,9 +260,19 @@ export function Wallet() {
             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Payments Ledger</p>
             <h2 className="mt-2 text-xl font-black uppercase tracking-tight text-black">Wallet Payment Activity</h2>
           </div>
-          <div className="text-right">
-            <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">Buyer Address</p>
-            <p className="mt-2 font-mono text-xs font-bold text-black">{shorten(walletAddress)}</p>
+          <div className="flex items-center justify-end gap-3">
+            <div className="text-right">
+              <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">Buyer Address</p>
+              <p className="mt-2 font-mono text-xs font-bold text-black">{shorten(walletAddress)}</p>
+            </div>
+            <button
+              onClick={handlePollCircle}
+              disabled={polling || isLoadingTransactions}
+              className="text-[9px] font-bold uppercase tracking-widest px-3 py-2 border-2 border-black rounded hover:bg-blue-50 disabled:opacity-50 transition-colors"
+              title="Poll Circle for pending transaction updates"
+            >
+              {polling ? "..." : "◆"}
+            </button>
           </div>
         </div>
 
@@ -238,41 +283,69 @@ export function Wallet() {
             </div>
           ) : transactions.length === 0 ? (
             <div className="border-2 border-dashed border-black p-6 text-center">
-              <p className="text-xs font-black uppercase tracking-[0.15em] text-black">No wallet payments yet</p>
+              <p className="text-xs font-black uppercase tracking-[0.15em] text-black">No confirmed payments yet</p>
               <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-gray-500">
-                Fund the wallet, then run the buyer workflow from the dashboard to create real payment records here.
+                Run the buyer workflow from the dashboard. Payments will appear here once confirmed on the blockchain.
               </p>
             </div>
           ) : (
-            <div className="space-y-5">
+            <div className="space-y-3">
               {transactions.map((tx) => {
-                const explorerUrl = tx.tx_hash ? `${ARC_EXPLORER_BASE_URL}/tx/${tx.tx_hash}` : null;
+                const isComplete = tx.state === 'COMPLETE' && tx.tx_hash;
+                const explorerUrl = isComplete ? `${ARC_EXPLORER_BASE_URL}/tx/${tx.tx_hash}` : null;
+                const circleIdShort = `${tx.circle_transaction_id.slice(0, 8)}...${tx.circle_transaction_id.slice(-8)}`;
+                const txHashShort = tx.tx_hash ? `${tx.tx_hash.slice(0, 12)}...${tx.tx_hash.slice(-12)}` : null;
+
+                // Get the actual query/request from metadata instead of task_id
+                const metadata = tx.metadata;
+                const displayQuery = typeof metadata?.query === "string" ? metadata.query : tx.task_id;
+                const truncatedQuery = displayQuery.length > 50 ? displayQuery.substring(0, 50) + "..." : displayQuery;
+
                 return (
-                  <div key={tx.id} className="grid grid-cols-1 gap-5 border-b border-gray-200 pb-5 last:border-b-0 last:pb-0 md:grid-cols-[1.3fr_0.8fr_0.8fr_auto]">
-                    <div>
-                      <p className="text-xs font-black uppercase tracking-widest text-black">{tx.task_id}</p>
-                      <p className="mt-2 break-all font-mono text-[10px] font-bold text-gray-500">{tx.circle_transaction_id}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">Amount</p>
-                      <p className="mt-2 text-xs font-black uppercase tracking-widest text-black">{Number(tx.amount_usdc || 0).toFixed(6)} USDC</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">State</p>
-                      <p className="mt-2 text-xs font-black uppercase tracking-widest text-black">{tx.state}</p>
-                    </div>
-                    <div className="md:justify-self-end">
-                      {explorerUrl ? (
-                        <a
-                          href={explorerUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-2 border-2 border-black px-4 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] transition-all hover:-translate-y-0.5 hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]"
-                        >
-                          <ExternalLink size={14} />
-                          Open Tx
-                        </a>
-                      ) : null}
+                  <div key={tx.id} className="border-2 border-black bg-white">
+                    <div className="flex gap-4 p-4">
+                      {/* LEFT BOX: Transaction Core Info */}
+                      <div className="flex-1 min-w-0 flex flex-col justify-between">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-700 mb-2 line-clamp-1" title={displayQuery}>
+                          {truncatedQuery}
+                        </p>
+
+                        <p className="text-xl font-black text-black mb-3">
+                          {Number(tx.amount_usdc || 0).toFixed(6)}
+                        </p>
+
+                        <p className="text-[8px] font-mono text-gray-500 truncate" title={tx.circle_transaction_id}>
+                          {circleIdShort}
+                        </p>
+                      </div>
+
+                      {/* RIGHT BOX: Blockchain Confirmation */}
+                      <div className="flex-1 border-l-2 border-gray-200 pl-4 flex flex-col justify-between">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-2">
+                          {isComplete ? 'ON CHAIN' : 'PENDING'}
+                        </p>
+
+                        {isComplete ? (
+                          <>
+                            <a
+                              href={explorerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm font-black text-blue-600 hover:text-blue-800 hover:underline transition-colors mb-2 flex items-center gap-1 group"
+                              title={`View on Arc: ${tx.tx_hash}`}
+                            >
+                              <span className="truncate">{txHashShort}</span>
+                              <ExternalLink size={12} className="flex-shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                            </a>
+                            <p className="text-[8px] font-bold text-green-700">CONFIRMED</p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm font-bold text-gray-400">-</p>
+                            <p className="text-[8px] font-bold text-gray-500">Awaiting confirmation...</p>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

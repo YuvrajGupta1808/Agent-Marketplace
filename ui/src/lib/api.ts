@@ -193,11 +193,17 @@ export function runMarketplace(payload: {
 }
 
 export interface StreamEvent {
-  type: "node_update" | "custom_event" | "stream_complete" | "error" | "final_answer";
+  type: "node_update" | "custom_event" | "stream_complete" | "error" | "final_answer" | "transaction_created";
   node?: string;
   data?: Record<string, unknown>;
   error?: string;
   answer?: string;
+  event_type?: string;
+  circle_transaction_id?: string;
+  amount_usdc?: string;
+  tx_hash?: string;
+  task_id?: string;
+  buyer_agent_id?: string;
 }
 
 export async function* streamMarketplace(payload: {
@@ -285,6 +291,12 @@ export function getTransactions(params?: { threadId?: string; buyerAgentId?: str
   if (params?.buyerAgentId) search.set("buyer_agent_id", params.buyerAgentId);
   const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiRequest<{ total: number; transactions: Transaction[] }>(`/transactions${suffix}`);
+}
+
+export function pollPendingTransactions() {
+  return apiRequest<{ updated: number; total_pending: number; message: string }>("/transactions/poll-pending", {
+    method: "POST",
+  });
 }
 
 export { API_BASE_URL };

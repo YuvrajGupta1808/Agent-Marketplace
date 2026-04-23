@@ -1,7 +1,8 @@
+import { useRef } from "react";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { AgentFlowGraph } from "../components/dashboard/AgentFlowGraph";
 import { ChatInterface } from "../components/dashboard/ChatInterface";
-import { TransactionHistory } from "../components/dashboard/TransactionHistory";
+import { TransactionHistory, type TransactionHistoryRef } from "../components/dashboard/TransactionHistory";
 import { useAppState } from "../lib/app-state";
 
 function ResizeHandle() {
@@ -17,6 +18,7 @@ function VerticalResizeHandle() {
 }
 
 export function Dashboard() {
+  const transactionHistoryRef = useRef<TransactionHistoryRef>(null);
   const {
     currentBuyer,
     health,
@@ -53,7 +55,7 @@ export function Dashboard() {
 
             <Panel defaultSize={30} minSize={20} className="min-h-0 min-w-0">
               <div className="h-full min-h-0 w-full overflow-hidden bg-white">
-                <TransactionHistory latestRun={latestRun} />
+                <TransactionHistory ref={transactionHistoryRef} latestRun={latestRun} />
               </div>
             </Panel>
           </PanelGroup>
@@ -70,6 +72,7 @@ export function Dashboard() {
               setSelectedSellerId={(sellerId) => setSelectedSellerId(sellerId || null)}
               onRunWorkflow={runBuyerWorkflow}
               isCircleEnabled={Boolean(health?.circle_enabled)}
+              transactionHistoryRef={transactionHistoryRef}
             />
           </div>
         </Panel>

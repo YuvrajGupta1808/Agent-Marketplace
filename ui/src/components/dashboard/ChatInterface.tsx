@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { streamMarketplace } from "../../lib/api";
 import type { AgentRecord, RunResponse, StreamEvent } from "../../lib/api";
+import type { TransactionHistoryRef } from "./TransactionHistory";
 import { ThinkingNode } from "./ThinkingNode";
 
 interface ChatInterfaceProps {
@@ -13,6 +14,7 @@ interface ChatInterfaceProps {
   setSelectedSellerId: (sellerId: string) => void;
   onRunWorkflow: (goal: string) => Promise<RunResponse>;
   isCircleEnabled: boolean;
+  transactionHistoryRef?: React.RefObject<TransactionHistoryRef>;
 }
 
 interface Message {
@@ -73,7 +75,7 @@ export function ChatInterface({
   const [input, setInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
-  const [finalAnswer, setFinalAnswer] = useState("");
+  const [currentUserMsgId, setCurrentUserMsgId] = useState<string | null>(null);
 
   const connectedSellerIds = Array.isArray(buyer?.metadata.connected_seller_ids)
     ? (buyer?.metadata.connected_seller_ids as string[])
@@ -99,11 +101,13 @@ export function ChatInterface({
 
     const goal = input;
     const userMsgId = `user-${Date.now()}`;
+    const answerMsgId = `answer-${Date.now()}`;
+
     setMessages(prev => [...prev, { role: "user", content: goal, id: userMsgId }]);
     setInput("");
+    setCurrentUserMsgId(userMsgId);
     setIsSubmitting(true);
-    setStreamEvents([]);
-    setFinalAnswer("");
+    setStreamEvents([]); // Clear old events for this new request
 
     try {
       const events: StreamEvent[] = [];
@@ -120,17 +124,37 @@ export function ChatInterface({
         // Capture final answer from stream
         if (event.type === "final_answer") {
           answer = event.answer || "";
-          setFinalAnswer(answer);
+        }
+
+        // Handle real-time transaction creation
+        if (event.type === "transaction_created" || event.event_type === "transaction_created") {
+          const txData = event;
+          if (transactionHistoryRef?.current) {
+            transactionHistoryRef.current.addRealtimeTransaction({
+              circle_transaction_id: txData.circle_transaction_id || "",
+              amount_usdc: txData.amount_usdc || "0",
+              tx_hash: txData.tx_hash || null,
+              task_id: txData.task_id || "unknown",
+              buyer_agent_id: txData.buyer_agent_id || "",
+              state: txData.tx_hash ? "COMPLETE" : "INITIATED",
+              created_at: new Date().toISOString(),
+            });
+            console.log("📊 Real-time transaction added:", txData.circle_transaction_id?.slice(0, 16));
+          }
         }
       }
 
-      // Use the actual answer from the backend, or default if empty
-      setFinalAnswer(answer || "Research completed successfully.");
+      // Add the final answer to messages (use actual answer from backend)
+      const finalAnswer = answer || "Research completed successfully.";
+      setMessages(prev => [...prev, { role: "agent", content: finalAnswer, id: answerMsgId }]);
+      // Keep streamEvents for persistent thinking section display
     } catch (error) {
       const message = error instanceof Error ? error.message : "Workflow failed.";
-      setFinalAnswer(`❌ Error: ${message}`);
+      setMessages(prev => [...prev, { role: "agent", content: `❌ Error: ${message}`, id: answerMsgId }]);
+      // Keep streamEvents even on error for debugging
     } finally {
       setIsSubmitting(false);
+      setCurrentUserMsgId(null);
     }
   };
 
@@ -142,25 +166,6 @@ export function ChatInterface({
         <span className="text-[10px] font-black uppercase tracking-[0.2em] text-black">
           Chat: {buyer?.name ?? "No Buyer Agent"}
         </span>
-      </div>
-
-      {/* Seller Selection */}
-      <div className="border-b border-gray-200 bg-white px-6 py-3">
-        <label className="mb-2 block text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Seller Agent</label>
-        <select
-          value={selectedSellerId ?? ""}
-          onChange={(event) => setSelectedSellerId(event.target.value)}
-          className="w-full bg-white border-2 border-black px-4 py-3 text-xs font-bold uppercase tracking-widest outline-none"
-        >
-          <option value="" disabled>
-            Select seller agent
-          </option>
-          {availableSellers.map((seller) => (
-            <option key={seller.id} value={seller.id}>
-              {seller.name}
-            </option>
-          ))}
-        </select>
       </div>
 
       {/* Messages - Only this scrolls */}
@@ -215,56 +220,10 @@ export function ChatInterface({
           </div>
         ))}
 
-        {/* Show thinking section during or after execution */}
-        {(isSubmitting || streamEvents.length > 0) && (
+        {/* Show thinking section during execution */}
+        {isSubmitting && currentUserMsgId && (
           <div className="flex w-full flex-col items-start">
-            <ThinkingNode isLoading={isSubmitting} events={streamEvents} />
-          </div>
-        )}
-
-        {/* Show final answer after thinking section */}
-        {finalAnswer && (
-          <div className="flex w-full flex-col items-start">
-            <div className="p-4 rounded-none text-xs font-semibold max-w-[85%] border-2 leading-relaxed whitespace-pre-wrap wrap-break-word shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white text-gray-800 border-black">
-              <div className="space-y-2 leading-relaxed">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ children }) => <h1 className="text-sm font-black">{children}</h1>,
-                    h2: ({ children }) => <h2 className="text-xs font-black">{children}</h2>,
-                    h3: ({ children }) => <h3 className="text-xs font-bold">{children}</h3>,
-                    p: ({ children }) => <p className="text-xs font-medium">{children}</p>,
-                    ul: ({ children }) => <ul className="list-disc pl-5 text-xs font-medium space-y-1">{children}</ul>,
-                    ol: ({ children }) => <ol className="list-decimal pl-5 text-xs font-medium space-y-1">{children}</ol>,
-                    li: ({ children }) => <li>{children}</li>,
-                    code: ({ children }) => (
-                      <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-black">{children}</code>
-                    ),
-                    pre: ({ children }) => (
-                      <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px]">{children}</pre>
-                    ),
-                    blockquote: ({ children }) => (
-                      <blockquote className="border-l-2 border-gray-400 pl-3 italic text-gray-700">{children}</blockquote>
-                    ),
-                    a: ({ href, children }) => (
-                      <a
-                        href={href}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline underline-offset-2"
-                      >
-                        {children}
-                      </a>
-                    ),
-                  }}
-                >
-                  {normalizeChatContent(finalAnswer)}
-                </ReactMarkdown>
-              </div>
-            </div>
-            <span className="mt-2 text-[9px] font-black uppercase tracking-widest text-gray-400">
-              System Node
-            </span>
+            <ThinkingNode isLoading={true} events={streamEvents} />
           </div>
         )}
       </div>
