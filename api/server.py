@@ -282,14 +282,26 @@ async def run_marketplace_stream(request: RunRequest):
 
     async def event_generator():
         """Generate SSE events showing real-time agent thinking and progress."""
+        import json as json_module
         queue: list = []
+
+        def make_serializable(obj):
+            """Recursively convert Pydantic models and other objects to JSON-serializable types."""
+            if hasattr(obj, 'model_dump'):
+                return make_serializable(obj.model_dump())
+            elif isinstance(obj, dict):
+                return {k: make_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [make_serializable(item) for item in obj]
+            else:
+                return obj
 
         def emit_event(event_type: str, data: dict, phase: str = None):
             """Emit an event to the stream."""
             event = {
                 "type": event_type,
                 "phase": phase,
-                "data": data,
+                "data": make_serializable(data),
                 "timestamp_ms": int(time.time() * 1000),
             }
             queue.append(event)

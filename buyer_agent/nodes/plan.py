@@ -24,26 +24,59 @@ def _extract_json(content: str) -> dict:
         cleaned = next((part for part in parts if "{" in part), cleaned)
         cleaned = cleaned.replace("json", "", 1).strip()
 
-    # Try multiple recovery strategies
-    strategies = [
-        lambda s: s,  # Original
-        lambda s: _re.sub(r',(\s*[}\]])', r'\1', s),  # Remove trailing commas
-        lambda s: _re.sub(r':\s*"([^"]*?),', r': "\1",', s),  # Fix broken string values
-        lambda s: s.rstrip('}') + '}' * (s.count('{') - s.count('}')),  # Balance braces
-    ]
-
-    for strategy in strategies:
+    def try_parse(s: str) -> dict | None:
+        """Try to parse JSON with error handling."""
         try:
-            # Find JSON object - be greedy to handle incomplete JSON
-            match = _re.search(r'\{.*?\}(?:\s*(?:,\s*\{.*?\})*)?', strategy(cleaned), flags=_re.DOTALL)
-            if match:
-                json_str = match.group(0)
-            else:
-                json_str = strategy(cleaned)
-
-            return json.loads(json_str)
+            return json.loads(s)
         except (json.JSONDecodeError, ValueError):
+            return None
+
+    # Try strategies in order
+    # 1. Original (most common case)
+    result = try_parse(cleaned)
+    if result:
+        return result
+
+    # 2. Remove trailing commas
+    result = try_parse(_re.sub(r',(\s*[}\]])', r'\1', cleaned))
+    if result:
+        return result
+
+    # 3. Balance braces (for incomplete JSON)
+    balanced = cleaned.rstrip('}') + '}' * max(0, cleaned.count('{') - cleaned.count('}'))
+    result = try_parse(balanced)
+    if result:
+        return result
+
+    # 4. Try to extract just the first complete JSON object
+    # Use a state machine to find matching braces
+    depth = 0
+    in_string = False
+    escape = False
+    start = -1
+
+    for i, char in enumerate(cleaned):
+        if escape:
+            escape = False
             continue
+        if char == '\\' and in_string:
+            escape = True
+            continue
+        if char == '"' and (i == 0 or cleaned[i-1] != '\\'):
+            in_string = not in_string
+            continue
+        if not in_string:
+            if char == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0 and start != -1:
+                    json_str = cleaned[start:i+1]
+                    result = try_parse(json_str)
+                    if result:
+                        return result
 
     raise ValueError(f"Failed to parse JSON after all recovery attempts. Original: {content[:300]}...")
 
@@ -69,26 +102,17 @@ def _generate_research_plan_llm(query: str) -> dict:
             {
                 "role": "system",
                 "content": (
-                    "You are a strategic research planner for an autonomous buyer agent. "
-                    "Analyze queries deeply and create a detailed, thoughtful research strategy. "
-                    "Your reasoning should explain WHY this approach is best.\n\n"
-                    "Return ONLY a JSON object with:\n"
-                    '{\n'
-                    '  "reasoning": "detailed explanation of your research strategy and why it works",\n'
-                    '  "research_steps": [\n'
-                    '    {"step": "specific action or focus area", "why": "importance to answering the query"},\n'
-                    '    ...\n'
-                    '  ]\n'
-                    '}'
+                    "You are a strategic research planner. Return ONLY valid JSON.\n"
+                    '{"reasoning": "brief strategy explanation", "research_steps": [{"step": "action", "why": "relevance"}]}'
                 ),
             },
             {
                 "role": "user",
-                "content": f"Query: {query}\n\nDevelop a comprehensive research strategy for this query. Think about what information is needed, what angles to explore, and why.",
+                "content": f"Query: {query}\n\nBriefly plan a research strategy as JSON.",
             },
         ],
-        max_tokens=384,
-        temperature=0.6,
+        max_tokens=256,
+        temperature=0.3,
     )
 
     content = completion.choices[0].message.content or ""
