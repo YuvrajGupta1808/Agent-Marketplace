@@ -218,23 +218,30 @@ export function ChatInterface({
   };
 
   return (
-    <div className="flex h-full flex-col bg-gray-50/50">
-      <div className="border-b-4 border-black bg-white px-6 py-4 flex items-center gap-2">
-        <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse z-10"></div>
-        <span className="text-[10px] font-black uppercase tracking-[0.2em] text-black">
-          Chat: {buyer?.name ?? "No Buyer Agent"}
-        </span>
+    <div className="flex h-full flex-col bg-gradient-to-br from-gray-50 to-gray-100">
+      {/* Header */}
+      <div className="border-b border-gray-200 bg-white/80 backdrop-blur px-6 py-4 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+          <div>
+            <span className="text-xs font-semibold text-gray-900 uppercase tracking-wide">
+              {buyer?.name ?? "No Buyer Agent"}
+            </span>
+            <p className="text-[11px] text-gray-500 mt-0.5">Agent Marketplace</p>
+          </div>
+        </div>
       </div>
 
-      <div className="border-b border-gray-200 bg-white px-6 py-3">
-        <label className="mb-2 block text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Seller Agent</label>
+      {/* Seller Selection */}
+      <div className="border-b border-gray-200 bg-white/50 px-6 py-4">
+        <label className="mb-3 block text-xs font-semibold uppercase tracking-wide text-gray-700">Select Research Provider</label>
         <select
           value={selectedSellerId ?? ""}
           onChange={(event) => setSelectedSellerId(event.target.value)}
-          className="w-full bg-white border-2 border-black px-4 py-3 text-xs font-bold uppercase tracking-widest outline-none"
+          className="w-full bg-white border border-gray-300 px-4 py-2.5 text-sm font-medium text-gray-900 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all hover:border-gray-400"
         >
           <option value="" disabled>
-            Select seller agent
+            Choose a seller agent...
           </option>
           {availableSellers.map((seller) => (
             <option key={seller.id} value={seller.id}>
@@ -243,35 +250,52 @@ export function ChatInterface({
           ))}
         </select>
       </div>
-      
+
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4 flex flex-col justify-end">
         {messages.map((msg, i) => (
           <div key={i} className={`flex w-full flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
-             <div className={`p-4 rounded-none text-xs font-semibold max-w-[85%] border-2 leading-relaxed shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${msg.role === "user" ? "bg-black text-white border-black" : "bg-white text-gray-800 border-black"}`}>
-               {msg.content}
+             <div className={`px-5 py-3 max-w-[85%] rounded-2xl leading-relaxed text-sm transition-all ${
+               msg.role === "user"
+                 ? "bg-blue-600 text-white rounded-br-none shadow-lg"
+                 : "bg-white text-gray-900 border border-gray-200 rounded-bl-none shadow-md"
+             }`}>
+               <div className="whitespace-pre-wrap break-words">{msg.content}</div>
              </div>
-             <span className="mt-2 text-[9px] font-black uppercase tracking-widest text-gray-400">
-               {msg.role === "user" ? "User" : "System Node"}
+             <span className={`mt-2 text-xs font-medium ${msg.role === "user" ? "text-blue-600" : "text-gray-500"}`}>
+               {msg.role === "user" ? "You" : "Agent"}
              </span>
           </div>
         ))}
+        {isSubmitting && (
+          <div className="flex items-center gap-2 text-gray-500">
+            <div className="flex gap-1">
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: "0.1s"}}></div>
+              <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: "0.2s"}}></div>
+            </div>
+            <span className="text-xs">Agent thinking...</span>
+          </div>
+        )}
       </div>
 
-      <div className="p-6 bg-white border-t border-gray-100">
-        <form onSubmit={handleSend} className="relative">
+      {/* Input */}
+      <div className="border-t border-gray-200 bg-white/80 backdrop-blur px-6 py-5">
+        <form onSubmit={handleSend} className="relative flex items-center gap-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="COMMAND AGENT..."
-            className="w-full bg-white border-2 border-black py-4 pl-6 pr-14 text-xs font-bold uppercase tracking-widest rounded-none focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all"
+            disabled={isSubmitting}
+            placeholder="Ask the research agent anything..."
+            className="flex-1 bg-gray-100 border border-gray-300 px-5 py-3 text-sm text-gray-900 rounded-full focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
           />
           <button
             type="submit"
-            disabled={isSubmitting}
-            className="absolute right-2 top-2 bg-black text-white w-10 h-10 rounded-none flex items-center justify-center transition-transform hover:-translate-y-0.5 active:translate-y-0"
+            disabled={isSubmitting || !input.trim()}
+            className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white w-10 h-10 rounded-full flex items-center justify-center transition-all transform hover:scale-105 active:scale-95 shadow-lg"
           >
-            <Send size={16} />
+            <Send size={18} />
           </button>
         </form>
       </div>

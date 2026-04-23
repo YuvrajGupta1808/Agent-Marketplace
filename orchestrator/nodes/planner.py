@@ -26,22 +26,28 @@ def _extract_json(content: str) -> dict:
         cleaned = next((part for part in parts if "{" in part), cleaned)
         cleaned = cleaned.replace("json", "", 1).strip()
 
-    # Find JSON object
-    match = _re.search(r"\{.*\}", cleaned, flags=_re.DOTALL)
-    if match:
-        cleaned = match.group(0)
+    # Try multiple recovery strategies
+    strategies = [
+        lambda s: s,  # Original
+        lambda s: _re.sub(r',(\s*[}\]])', r'\1', s),  # Remove trailing commas
+        lambda s: _re.sub(r':\s*"([^"]*?),', r': "\1",', s),  # Fix broken string values
+        lambda s: s.rstrip('}') + '}' * (s.count('{') - s.count('}')),  # Balance braces
+    ]
 
-    # Try to parse, with fallback for common issues
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        # Try to fix common issues
-        # Remove trailing commas
-        cleaned = _re.sub(r',(\s*[}\]])', r'\1', cleaned)
+    for strategy in strategies:
         try:
-            return json.loads(cleaned)
-        except json.JSONDecodeError:
-            raise ValueError(f"Failed to parse JSON after cleanup. Original: {content[:300]}... Error: {str(e)}")
+            # Find JSON object - be greedy to handle incomplete JSON
+            match = _re.search(r'\{.*?\}(?:\s*(?:,\s*\{.*?\})*)?', strategy(cleaned), flags=_re.DOTALL)
+            if match:
+                json_str = match.group(0)
+            else:
+                json_str = strategy(cleaned)
+
+            return json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    raise ValueError(f"Failed to parse JSON after all recovery attempts. Original: {content[:300]}...")
 
 
 def _detect_intent(goal: str) -> dict:
