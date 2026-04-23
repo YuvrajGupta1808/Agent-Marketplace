@@ -350,6 +350,34 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
 
             print(f"✅ Orchestrator completed successfully\n")
 
+            # Save transactions to database (same as /run endpoint)
+            if final_result:
+                payments = final_result.get("payments", [])
+                task_specs = final_result.get("task_specs", [])
+
+                if payments and task_specs:
+                    # Convert PaymentRecord objects to dicts if needed
+                    payment_dicts = []
+                    for pmt in payments:
+                        pmt_dict = pmt.model_dump() if hasattr(pmt, 'model_dump') else dict(pmt)
+                        payment_dicts.append(pmt_dict)
+
+                    # Save each payment-task combination to database
+                    for payment in payment_dicts:
+                        for task_spec in task_specs:
+                            task_id = task_spec.get("task_id") if isinstance(task_spec, dict) else task_spec.task_id
+                            try:
+                                repository.save_transaction(
+                                    thread_id=request.thread_id,
+                                    task_id=task_id,
+                                    buyer_agent_id=request.buyer_agent_id,
+                                    seller_agent_id=request.seller_agent_id,
+                                    payment=payment if isinstance(payment, dict) else payment.model_dump(),
+                                )
+                                print(f"  ✓ Saved transaction for task {task_id}")
+                            except Exception as e:
+                                print(f"  ⚠️ Failed to save transaction: {e}")
+
             # Emit final result with the answer
             if final_result:
                 final_answer = final_result.get("final_answer") or final_result.get("running_answer")

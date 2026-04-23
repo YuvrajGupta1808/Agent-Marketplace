@@ -44,6 +44,7 @@ export function TransactionHistory({ latestRun }: TransactionHistoryProps) {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const taskNames = useMemo(() => {
     const labels = new Map<string, string>();
@@ -67,23 +68,40 @@ export function TransactionHistory({ latestRun }: TransactionHistoryProps) {
     return labels;
   }, [latestRun]);
 
-  useEffect(() => {
-    const fetchTransactions = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
-        const response = await getTransactions();
-        setTransactions(response.transactions);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to fetch transactions");
-        setTransactions([]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  const fetchTransactions = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const response = await getTransactions();
+      setTransactions(response.transactions || []);
+      console.log(`Loaded ${response.transactions?.length || 0} transactions from database`);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : "Failed to fetch transactions";
+      setError(errMsg);
+      console.error("Error fetching transactions:", errMsg);
+      setTransactions([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  useEffect(() => {
     fetchTransactions();
   }, []);
+
+  // Refresh when latestRun changes (new workflow completed)
+  useEffect(() => {
+    if (latestRun) {
+      console.log("New run detected, refreshing transactions...");
+      fetchTransactions();
+    }
+  }, [latestRun?.thread_id]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchTransactions();
+    setRefreshing(false);
+  };
 
   const total = transactions.reduce((sum, tx) => sum + Number(tx.amount_usdc || 0), 0);
   const sortedTransactions = [...transactions].sort((a, b) => {
@@ -111,7 +129,17 @@ export function TransactionHistory({ latestRun }: TransactionHistoryProps) {
     <div className="flex h-full flex-col bg-white">
       <div className="border-b-4 border-black px-6 py-4 flex items-center justify-between">
         <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-black">Ledger Stream</h3>
-        <span className="text-[9px] font-bold text-gray-400">TOTAL: {total.toFixed(6)} USDC</span>
+        <div className="flex items-center gap-3">
+          <span className="text-[9px] font-bold text-gray-400">TOTAL: {total.toFixed(6)} USDC</span>
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing || isLoading}
+            className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 border border-black rounded hover:bg-gray-100 disabled:opacity-50"
+            title="Refresh transactions"
+          >
+            {refreshing ? "..." : "↻"}
+          </button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
@@ -123,6 +151,12 @@ export function TransactionHistory({ latestRun }: TransactionHistoryProps) {
           <div className="border-2 border-dashed border-red-300 p-5 text-center bg-red-50">
             <p className="text-xs font-black uppercase tracking-[0.15em] text-red-600">Error loading transactions</p>
             <p className="mt-2 text-[10px] font-bold text-red-500">{error}</p>
+            <button
+              onClick={handleRefresh}
+              className="mt-3 text-[9px] font-bold uppercase tracking-widest px-3 py-2 bg-black text-white border border-black rounded hover:bg-gray-800"
+            >
+              Retry
+            </button>
           </div>
         ) : sortedTransactions.length === 0 ? (
           <div className="border-2 border-dashed border-black p-5 text-center">
@@ -140,37 +174,41 @@ export function TransactionHistory({ latestRun }: TransactionHistoryProps) {
             const statusClass =
               tx.state === "CONFIRMED" || tx.state === "COMPLETE"
                 ? "text-green-600 font-bold"
-                : "text-yellow-600 font-bold";
+                : tx.state === "INITIATED"
+                ? "text-yellow-600 font-bold"
+                : "text-gray-600 font-bold";
 
             return (
-            <div key={txId} className="flex items-center justify-between border-b border-gray-100 pb-4 last:border-b-0 last:pb-0">
+            <div key={txId} className="flex items-start justify-between border-b border-gray-100 pb-4 last:border-b-0 last:pb-0">
               <div className="flex-1">
-                <p className="text-xs font-bold tracking-wide text-black">{getTaskName(tx)}</p>
-                <div className="flex items-center gap-2 mt-2 text-[9px] text-gray-600 font-mono">
+                <div className="flex items-start justify-between mb-1">
+                  <p className="text-xs font-bold tracking-wide text-black flex-1 mr-2">{getTaskName(tx)}</p>
+                  <p className="text-xs font-mono font-bold text-black whitespace-nowrap">{Number(tx.amount_usdc || 0).toFixed(6)} USDC</p>
+                </div>
+                <div className="flex items-center gap-2 mt-2 text-[9px] text-gray-600 font-mono flex-wrap">
                   {explorerUrl ? (
                     <a
                       href={explorerUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="hover:text-blue-600 underline flex items-center gap-1"
+                      title={tx.tx_hash}
                     >
-                      {tx.tx_hash ? tx.tx_hash.substring(0, 16) + '...' : txId.substring(0, 16) + '...'}
-                      <ExternalLink size={10} className="inline" />
+                      {tx.tx_hash ? tx.tx_hash.substring(0, 12) + '...' : txId.substring(0, 12) + '...'}
+                      <ExternalLink size={10} className="inline flex-shrink-0" />
                     </a>
                   ) : (
-                    <span className="text-gray-400">{txId.substring(0, 16)}...</span>
+                    <span className="text-gray-400" title={txId}>{txId.substring(0, 12)}...</span>
                   )}
                   <span>•</span>
                   <span className={statusClass}>
                     {statusLabel}
                   </span>
+                  <span>•</span>
+                  <span className="text-[9px] text-gray-500">
+                    {tx.created_at ? new Date(tx.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recorded'}
+                  </span>
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="text-xs font-mono font-bold text-black">{Number(tx.amount_usdc || 0).toFixed(6)} USDC</p>
-                <p className="text-[9px] text-gray-500 mt-1 uppercase font-bold">
-                  {tx.created_at ? new Date(tx.created_at).toLocaleDateString() : 'Recorded'}
-                </p>
               </div>
             </div>
           )})}
