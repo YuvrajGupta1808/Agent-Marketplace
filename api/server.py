@@ -246,16 +246,7 @@ def run_marketplace(request: RunRequest) -> RunResponse:
             payment_dicts.append(pmt_dict)
         payments = payment_dicts
 
-    # Save transactions to database
-    for payment in payments:
-        for task_spec in result.get("task_specs", []):
-            repository.save_transaction(
-                thread_id=request.thread_id,
-                task_id=task_spec.get("task_id") if isinstance(task_spec, dict) else task_spec.task_id,
-                buyer_agent_id=request.buyer_agent_id,
-                seller_agent_id=request.seller_agent_id,
-                payment=payment if isinstance(payment, dict) else payment.model_dump(),
-            )
+    # Note: Transactions are saved immediately in execute_payment node, not here
 
     return RunResponse(
         thread_id=request.thread_id,
@@ -304,6 +295,8 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
 
     def event_generator():
         final_result = None
+        all_payments = []
+        all_task_specs = []
         try:
             print(f"\n🚀 Starting streaming orchestrator with:")
             print(f"   Goal: {request.user_goal}")
@@ -324,9 +317,11 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
             ):
                 if chunk["type"] == "updates":
                     for node_name, state in chunk["data"].items():
-                        # Capture final result from synthesize_answer node
+                        # Capture final result and accumulate payments/task_specs
                         if node_name == "synthesize_answer":
                             final_result = state
+                            all_payments = state.get("payments", [])
+                            all_task_specs = state.get("task_specs", [])
 
                         event_data = {
                             "type": "node_update",
@@ -349,34 +344,7 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
                         print(f"  ⚠️ Failed to serialize custom event: {e}")
 
             print(f"✅ Orchestrator completed successfully\n")
-
-            # Save transactions to database (same as /run endpoint)
-            if final_result:
-                payments = final_result.get("payments", [])
-                task_specs = final_result.get("task_specs", [])
-
-                if payments and task_specs:
-                    # Convert PaymentRecord objects to dicts if needed
-                    payment_dicts = []
-                    for pmt in payments:
-                        pmt_dict = pmt.model_dump() if hasattr(pmt, 'model_dump') else dict(pmt)
-                        payment_dicts.append(pmt_dict)
-
-                    # Save each payment-task combination to database
-                    for payment in payment_dicts:
-                        for task_spec in task_specs:
-                            task_id = task_spec.get("task_id") if isinstance(task_spec, dict) else task_spec.task_id
-                            try:
-                                repository.save_transaction(
-                                    thread_id=request.thread_id,
-                                    task_id=task_id,
-                                    buyer_agent_id=request.buyer_agent_id,
-                                    seller_agent_id=request.seller_agent_id,
-                                    payment=payment if isinstance(payment, dict) else payment.model_dump(),
-                                )
-                                print(f"  ✓ Saved transaction for task {task_id}")
-                            except Exception as e:
-                                print(f"  ⚠️ Failed to save transaction: {e}")
+            # Note: Transactions are saved immediately in execute_payment node, not here
 
             # Emit final result with the answer
             if final_result:
@@ -476,3 +444,41 @@ def check_payment(circle_transaction_id: str) -> dict:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/transactions/poll-pending")
+def poll_pending_transactions() -> dict:
+    """Poll Circle for status updates on pending (INITIATED) transactions and update database."""
+    if not get_settings().circle_enabled:
+        return {"updated": 0, "message": "Circle not enabled"}
+
+    updated_count = 0
+    pending = repository.get_pending_transactions()
+
+    print(f"\n🔍 Polling {len(pending)} pending transactions from Circle...")
+
+    for tx in pending:
+        try:
+            circle_tx = get_circle_client().get_transaction(tx["circle_transaction_id"])
+            new_state = circle_tx.get("state", "INITIATED")
+            new_tx_hash = circle_tx.get("txHash") or circle_tx.get("tx_hash")
+
+            # Update if state changed or tx_hash now available
+            if new_state != tx["state"] or (new_tx_hash and not tx["tx_hash"]):
+                repository.update_transaction(
+                    circle_transaction_id=tx["circle_transaction_id"],
+                    tx_hash=new_tx_hash,
+                    state=new_state,
+                )
+                print(f"  ✅ Updated {tx['circle_transaction_id'][:16]}... → {new_state} (hash: {new_tx_hash[:16] if new_tx_hash else 'pending'}...)")
+                updated_count += 1
+        except Exception as e:
+            print(f"  ⚠️ Failed to poll {tx['circle_transaction_id'][:16]}...: {e}")
+
+    print(f"✅ Polling complete: {updated_count} transactions updated\n")
+
+    return {
+        "updated": updated_count,
+        "total_pending": len(pending),
+        "message": f"Updated {updated_count} of {len(pending)} pending transactions"
+    }

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import httpx
+from langgraph.config import get_stream_writer
 
 from buyer_agent.state import BuyerState
 from shared.config import get_settings
+from shared.repository import repository
 from shared.x402_client import (
     PAYMENT_REQUIRED_HEADER,
     PaymentOffer,
@@ -59,6 +61,41 @@ def execute_payment(state: BuyerState) -> dict:
                 "task_id": state.get("task_id", ""),
             }
             print(f"    ✓ Payment settled: {offer.amount_usdc} USDC")
+
+            # 🔴 IMMEDIATELY SAVE TRANSACTION TO DATABASE
+            try:
+                repository.save_transaction(
+                    thread_id=state.get("thread_id", "unknown"),
+                    task_id=state["task_id"],
+                    buyer_agent_id=state["buyer_agent_id"],
+                    seller_agent_id=state["seller_agent_id"],
+                    payment={
+                        "circle_transaction_id": receipt_dict.get("transaction_id"),
+                        "amount_usdc": offer.amount_usdc,
+                        "tx_hash": receipt_dict.get("tx_hash"),
+                        "state": "COMPLETE" if receipt_dict.get("tx_hash") else "INITIATED",
+                        "metadata": receipt_dict.get("metadata", {}),
+                    }
+                )
+                print(f"    💾 Saved to DB immediately: {receipt_dict.get('transaction_id')[:16]}...")
+
+                # Emit transaction event for real-time streaming
+                try:
+                    writer = get_stream_writer()
+                    if writer:
+                        writer({
+                            "event_type": "transaction_created",
+                            "task_id": state["task_id"],
+                            "circle_transaction_id": receipt_dict.get("transaction_id"),
+                            "amount_usdc": offer.amount_usdc,
+                            "tx_hash": receipt_dict.get("tx_hash"),
+                            "buyer_agent_id": state["buyer_agent_id"],
+                        })
+                except:
+                    pass  # Stream writer not available in non-streaming context
+            except Exception as e:
+                print(f"    ⚠️ Failed to save transaction: {e}")
+
             return {
                 "execution_plan": state.get("execution_plan", []),
                 "payment_authorization": authorization.model_dump(),

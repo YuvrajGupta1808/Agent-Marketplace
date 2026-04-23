@@ -25,6 +25,7 @@ def buyer_agent_node(state: dict) -> dict:
             "buyer_wallet_id": buyer_agent.wallet.circle_wallet_id,
             "buyer_wallet_address": buyer_agent.wallet.address,
             "seller_agent_id": state["seller_agent_id"],
+            "thread_id": state.get("thread_id", "unknown"),
         },
     )
     buyer_workflows = [

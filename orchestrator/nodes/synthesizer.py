@@ -98,5 +98,7 @@ def synthesize_answer(state: OrchestratorState) -> dict:
     return {
         "running_answer": running_answer,
         "final_answer": running_answer,
+        "payments": state.get("payments", []),  # Preserve payments from buyer_agent_node
+        "task_specs": state.get("task_specs", []),  # Preserve task_specs from plan_tasks
     }
 

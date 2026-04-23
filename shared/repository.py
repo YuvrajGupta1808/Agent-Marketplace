@@ -238,6 +238,9 @@ class MarketplaceRepository:
         created_at = utc_now()
         metadata_json = json.dumps(payment.get("metadata", {}), sort_keys=True)
 
+        # Use provided circle_transaction_id or generate a unique one
+        circle_tx_id = payment.get("circle_transaction_id") or f"tx-{tx_id}"
+
         with db_cursor() as connection:
             connection.execute(
                 """
@@ -252,7 +255,7 @@ class MarketplaceRepository:
                     task_id,
                     buyer_agent_id,
                     seller_agent_id,
-                    payment.get("circle_transaction_id", ""),
+                    circle_tx_id,
                     payment.get("amount_usdc", "0"),
                     payment.get("tx_hash"),
                     payment.get("state", "INITIATED"),
@@ -292,6 +295,37 @@ class MarketplaceRepository:
             }
             for row in rows
         ]
+
+    def get_pending_transactions(self) -> list[dict]:
+        """Get all transactions that are still INITIATED (pending blockchain confirmation)."""
+        with db_cursor() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM transactions
+                WHERE state = 'INITIATED' AND tx_hash IS NULL
+                ORDER BY created_at ASC
+                """,
+            ).fetchall()
+
+        return [
+            {
+                **dict(row),
+                "metadata": json.loads(row["metadata_json"]),
+            }
+            for row in rows
+        ]
+
+    def update_transaction(self, circle_transaction_id: str, tx_hash: str | None, state: str) -> None:
+        """Update transaction state and tx_hash when blockchain confirmation arrives."""
+        with db_cursor() as connection:
+            connection.execute(
+                """
+                UPDATE transactions
+                SET tx_hash = ?, state = ?
+                WHERE circle_transaction_id = ?
+                """,
+                (tx_hash, state, circle_transaction_id),
+            )
 
 
 repository = MarketplaceRepository()

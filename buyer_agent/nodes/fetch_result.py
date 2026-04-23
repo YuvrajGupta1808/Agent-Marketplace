@@ -55,12 +55,14 @@ def fetch_result(state: BuyerState) -> dict:
             metadata=result_dict.get("metadata", {}),
         )
 
-        # Add payment info
+        # Add payment info from the execute_payment receipt
         receipt = state.get("payment_receipt") or {}
+        print(f"    📋 Payment receipt: {bool(receipt)}, has transaction_id: {bool(receipt.get('transaction_id'))}")
         if receipt.get("tx_hash"):
             structured_result.tx_hash = receipt["tx_hash"]
         if receipt.get("transaction_id"):
             structured_result.circle_transaction_id = receipt["transaction_id"]
+            print(f"    ✓ Set circle_transaction_id: {receipt.get('transaction_id')[:16]}...")
         if receipt.get("amount_usdc"):
             structured_result.amount_usdc = receipt["amount_usdc"]
 

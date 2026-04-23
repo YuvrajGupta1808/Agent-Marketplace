@@ -16,6 +16,7 @@ class BuyerState(TypedDict, total=False):
     current_phase: str
     phase_start_ms: float
     event_callback: Any
+    thread_id: str
     buyer_agent_id: str
     buyer_wallet_id: str
     buyer_wallet_address: str
