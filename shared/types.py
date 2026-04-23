@@ -102,6 +102,8 @@ class PaymentRecord(BaseModel):
     amount_usdc: str
     tx_hash: str | None = None
     state: str = "INITIATED"
+    created_at: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphNodeOutput(BaseModel):

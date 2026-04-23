@@ -10,7 +10,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
-import type { AgentRecord, RunResponse, StreamEvent } from '../../lib/api';
+import type { AgentRecord, RunResponse } from '../../lib/api';
 
 function buildGraph(
   buyer: AgentRecord | null,
@@ -71,10 +71,9 @@ interface AgentFlowGraphProps {
   sellerAgents: AgentRecord[];
   selectedSellerId: string | null;
   latestRun: RunResponse | null;
-  streamEvents: StreamEvent[];
 }
 
-export function AgentFlowGraph({ buyer, sellerAgents, selectedSellerId, latestRun, streamEvents }: AgentFlowGraphProps) {
+export function AgentFlowGraph({ buyer, sellerAgents, selectedSellerId, latestRun }: AgentFlowGraphProps) {
   const graph = useMemo(
     () => buildGraph(buyer, sellerAgents, selectedSellerId, latestRun),
     [buyer, sellerAgents, selectedSellerId, latestRun],
@@ -117,23 +116,6 @@ export function AgentFlowGraph({ buyer, sellerAgents, selectedSellerId, latestRu
     return () => ro.disconnect();
   }, [centerGraph]);
 
-  // Compute current phase from stream events
-  let currentPhase = '';
-  let isStreaming = streamEvents.length > 0 && !streamEvents.some((e) => e.type === 'done');
-
-  if (streamEvents.length > 0) {
-    const lastEvent = streamEvents[streamEvents.length - 1];
-    if (lastEvent.type === 'phase_start' || lastEvent.type === 'phase_complete') {
-      currentPhase = (lastEvent.data.phase as string) || lastEvent.data.message as string || '';
-    } else if (lastEvent.type === 'buyer_executing') {
-      currentPhase = '🎯 Executing...';
-    } else if (lastEvent.type === 'research_complete') {
-      currentPhase = '📚 Synthesizing...';
-    } else if (lastEvent.type === 'done') {
-      currentPhase = '✅ Complete';
-    }
-  }
-
   // Show plan and execution info
   const executionPhases = latestRun?.buyer_workflows?.[0]?.node_outputs || [];
   const planningNote = latestRun?.buyer_workflows?.[0]?.execution_plan?.length
@@ -142,14 +124,12 @@ export function AgentFlowGraph({ buyer, sellerAgents, selectedSellerId, latestRu
   const timeInfo = executionPhases.length > 0
     ? `Execution: ${executionPhases.reduce((sum, n) => sum + (n.duration_ms || 0), 0)}ms`
     : '';
-  const phaseInfo = currentPhase && isStreaming ? `⚡ ${currentPhase}` : '';
 
   return (
     <div className="relative flex h-full flex-col bg-gray-50">
       <div className="absolute left-6 top-6 z-10 border-2 border-black bg-white p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
         <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-black">Agent Flow</h3>
         <p className="mt-1 text-[10px] font-bold uppercase text-gray-500">{buyer?.name || 'No Buyer'} → Sellers</p>
-        {phaseInfo && <p className={`mt-2 text-[9px] font-bold ${isStreaming ? 'animate-pulse text-blue-600' : 'text-green-600'}`}>{phaseInfo}</p>}
         {planningNote && <p className="mt-2 text-[9px] text-gray-600">📋 {planningNote}</p>}
         {timeInfo && <p className="text-[9px] text-gray-600">⏱️ {timeInfo}</p>}
         {latestRun?.is_conversational && <p className="mt-1 text-[9px] text-blue-600">💬 Conversational Query</p>}

@@ -14,6 +14,7 @@ from shared.types import BuyerWorkflowRecord, PaymentRecord, ResearchResult
 
 
 def buyer_agent_node(state: dict) -> dict:
+    print(f"\n🤖 buyer_agent_node: task_id={state['task_id']}, query={state['query'][:50]}")
     buyer_agent = repository.get_agent(state["buyer_agent_id"])
     result, trace = execute_buyer_graph_with_trace(
         {

@@ -47,7 +47,7 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
         duration_ms = int((time.time() - start_time) * 1000)
         state.update(output)
 
-        reasoning = output.get("reasoning", "")
+        thinking = output.get("thinking", "")
         status = "done" if not output.get("error") else "error"
 
         trace.append(
@@ -57,7 +57,7 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
                 phase=phase,
                 status=status,
                 duration_ms=duration_ms,
-                reasoning=reasoning,
+                reasoning=thinking,
                 input_state=_snapshot(input_state),
                 output=_snapshot(output),
                 state_after=_snapshot(dict(state)),

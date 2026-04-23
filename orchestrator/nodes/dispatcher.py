@@ -7,11 +7,15 @@ from orchestrator.state import OrchestratorState
 
 def route_from_planner(state: OrchestratorState):
     if state.get("pending_question"):
+        print(f"\n🛣️ route_from_planner: pending question → ask_clarification")
         return "ask_clarification"
 
-    if state.get("is_conversational") and state.get("direct_answer"):
+    task_specs = state.get("task_specs", [])
+    if not task_specs:
+        print(f"\n🛣️ route_from_planner: no tasks → synthesize_answer")
         return "synthesize_answer"
 
+    print(f"\n🛣️ route_from_planner: {len(task_specs)} task(s) → buyer_agent_node")
     return [
         Send(
             "buyer_agent_node",
@@ -22,5 +26,5 @@ def route_from_planner(state: OrchestratorState):
                 "seller_agent_id": state["seller_agent_id"],
             },
         )
-        for spec in state.get("task_specs", [])
+        for spec in task_specs
     ]

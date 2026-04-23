@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from "
 import {
   AgentRecord,
   HealthResponse,
+  PaymentRecord,
   RunResponse,
   StreamEvent,
   UserRecord,
@@ -12,7 +13,6 @@ import {
   listAgents,
   listUserAgents,
   runMarketplace,
-  runMarketplaceStream,
 } from "./api";
 
 interface AppStateValue {
@@ -25,6 +25,7 @@ interface AppStateValue {
   isReady: boolean;
   streamEvents: StreamEvent[];
   isStreaming: boolean;
+  allPayments: PaymentRecord[];
   loginAsUser: (user: UserRecord) => Promise<void>;
   registerNewUser: (displayName: string, externalId?: string) => Promise<UserRecord>;
   logout: () => void;
@@ -50,6 +51,20 @@ const STORAGE_KEYS = {
 
 const AppStateContext = createContext<AppStateValue | null>(null);
 
+function mergePayments(existing: PaymentRecord[], incoming: PaymentRecord[]): PaymentRecord[] {
+  const merged = new Map<string, PaymentRecord>();
+
+  for (const payment of existing) {
+    merged.set(payment.circle_transaction_id || payment.task_id, payment);
+  }
+
+  for (const payment of incoming) {
+    merged.set(payment.circle_transaction_id || payment.task_id, payment);
+  }
+
+  return Array.from(merged.values());
+}
+
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [currentBuyer, setCurrentBuyer] = useState<AgentRecord | null>(null);
@@ -60,6 +75,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [isReady, setIsReady] = useState(false);
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [allPayments, setAllPayments] = useState<PaymentRecord[]>([]);
 
   const refreshData = async () => {
     const [healthPayload, sellers] = await Promise.all([
@@ -89,6 +105,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setCurrentBuyer(null);
       setSelectedSellerId(sellers[0]?.id ?? null);
       setLatestRun(null);
+      setAllPayments([]);
       setIsReady(true);
       return;
     }
@@ -132,6 +149,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       }
     }
     void refreshData();
+    setAllPayments([]);
   }, []);
 
   useEffect(() => {
@@ -171,6 +189,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setCurrentBuyer(null);
     setSelectedSellerId(null);
     setLatestRun(null);
+    setAllPayments([]);
   };
 
   const createBuyerAgentForUser = async (payload: {
@@ -216,20 +235,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
 
     setIsStreaming(true);
-    setStreamEvents([]);
 
     try {
-      const result = await runMarketplaceStream(
-        {
-          userGoal,
-          buyerAgentId: currentBuyer.id,
-          sellerAgentId: selectedSellerId,
-        },
-        (event: StreamEvent) => {
-          setStreamEvents((prev) => [...prev, event]);
-        },
-      );
+      const result = await runMarketplace({
+        userGoal,
+        buyerAgentId: currentBuyer.id,
+        sellerAgentId: selectedSellerId,
+      });
       setLatestRun(result);
+      setAllPayments((currentPayments) => mergePayments(currentPayments, result.payments ?? []));
       return result;
     } finally {
       setIsStreaming(false);
@@ -251,6 +265,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       isReady,
       streamEvents,
       isStreaming,
+      allPayments,
       loginAsUser,
       registerNewUser,
       logout,
@@ -261,7 +276,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       runBuyerWorkflow,
       clearStreamEvents,
     }),
-    [currentUser, currentBuyer, sellerAgents, selectedSellerId, latestRun, health, isReady, streamEvents, isStreaming],
+    [currentUser, currentBuyer, sellerAgents, selectedSellerId, latestRun, health, isReady, streamEvents, isStreaming, allPayments],
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

@@ -13,9 +13,6 @@ class OrchestratorState(TypedDict, total=False):
     thread_id: str
     buyer_agent_id: str
     seller_agent_id: str
-    query_intent: str
-    is_conversational: bool
-    direct_answer: str | None
     task_specs: list[TaskSpec]
     results: Annotated[list[ResearchResult], operator.add]
     buyer_workflows: Annotated[list[BuyerWorkflowRecord], operator.add]
@@ -26,4 +23,3 @@ class OrchestratorState(TypedDict, total=False):
     clarification_answer: str | None
     running_answer: str
     final_answer: str | None
-    conversation_history: list[dict]

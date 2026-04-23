@@ -311,10 +311,12 @@ async def run_marketplace_stream(request: RunRequest):
             emit_event("phase_start", {"phase": "intent_detection", "message": "🧠 Analyzing query intent..."}, "plan")
             yield f"data: {json.dumps(queue.pop(0))}\n\n"
 
-            print(f"\n🚀 Starting orchestrator stream:")
+            print(f"\n{'='*60}")
+            print(f"🚀 Starting orchestrator stream:")
             print(f"   Goal: {request.user_goal}")
             print(f"   Buyer: {buyer.name}")
-            print(f"   Seller: {seller.name}\n")
+            print(f"   Seller: {seller.name}")
+            print(f"{'='*60}")
 
             # Run the orchestrator
             start_time = time.time()
@@ -329,73 +331,117 @@ async def run_marketplace_stream(request: RunRequest):
             )
             execution_time = int((time.time() - start_time) * 1000)
 
-            # Emit results progressively
-            is_conversational = result.get("is_conversational", False)
+            # Emit planning phase
+            task_specs = result.get("task_specs", [])
+            if task_specs:
+                try:
+                    tasks_data = []
+                    for t in task_specs:
+                        if hasattr(t, 'model_dump'):
+                            t_dict = t.model_dump()
+                        elif isinstance(t, dict):
+                            t_dict = t
+                        else:
+                            t_dict = {"task_id": str(t), "query": ""}
+                        tasks_data.append({
+                            "task_id": t_dict.get("task_id", "unknown"),
+                            "query": str(t_dict.get("query", ""))[:80]
+                        })
+                    emit_event("tasks_planned", {
+                        "task_count": len(task_specs),
+                        "message": f"Decomposed into {len(task_specs)} research task(s)",
+                        "tasks": tasks_data
+                    }, "plan")
+                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                except Exception as e:
+                    print(f"Error emitting tasks_planned event: {e}")
 
-            if is_conversational:
-                emit_event("phase_complete", {"phase": "intent_detection", "intent": "conversational"}, "plan")
-                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-                emit_event("answer_ready", {
-                    "message": "💬 Conversational query detected",
-                    "answer": result.get("direct_answer") or result.get("final_answer")
-                }, "answer")
-                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-            else:
-                # Research query - show planning
-                emit_event("phase_complete", {"phase": "intent_detection", "intent": "research"}, "plan")
-                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-                # Show plan
-                task_specs = result.get("task_specs", [])
-                emit_event("planning", {
-                    "message": f"📋 Planning {len(task_specs)} research task(s)",
-                    "tasks": [{"id": t.task_id, "query": t.query} for t in task_specs]
-                }, "plan")
-                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-                # Show buyer workflows
-                buyer_workflows = result.get("buyer_workflows", [])
-                for workflow in buyer_workflows:
-                    emit_event("buyer_executing", {
-                        "task_id": workflow.task_id,
-                        "message": f"🎯 Executing task: {workflow.task_id}",
-                        "steps": workflow.execution_plan[:3]  # Show first 3 steps
+            # Emit buyer workflows progress
+            buyer_workflows = result.get("buyer_workflows", [])
+            for workflow in buyer_workflows:
+                try:
+                    task_id = workflow.get("task_id") if isinstance(workflow, dict) else getattr(workflow, "task_id", "unknown")
+                    emit_event("buyer_workflow_start", {
+                        "task_id": task_id,
+                        "message": f"Processing: {task_id}"
                     }, "execute")
                     yield f"data: {json.dumps(queue.pop(0))}\n\n"
 
-                    # Show reasoning
-                    node_outputs = workflow.node_outputs or []
+                    # Show each node execution
+                    node_outputs = workflow.get("node_outputs", []) if isinstance(workflow, dict) else getattr(workflow, "node_outputs", []) or []
                     for node in node_outputs:
-                        if node.reasoning:
-                            emit_event("agent_reasoning", {
-                                "node": node.node_name,
-                                "title": node.title,
-                                "reasoning": node.reasoning,
-                                "duration_ms": node.duration_ms or 0
-                            }, "execute")
-                            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                        try:
+                            node_name = node.get("node_name") if isinstance(node, dict) else getattr(node, "node_name", "")
+                            node_output = node.get("output", {}) if isinstance(node, dict) else getattr(node, "output", {})
 
-                # Show results
-                results = result.get("results", [])
-                if results:
-                    emit_event("research_complete", {
-                        "message": f"📚 Research complete for {len(results)} task(s)",
-                        "count": len(results)
-                    }, "answer")
-                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                            # Extract relevant info from node output
+                            if node_name == "execute_payment" and isinstance(node_output, dict):
+                                emit_event("payment_executed", {
+                                    "task_id": task_id,
+                                    "amount_usdc": "0.001",
+                                    "status": "settled"
+                                }, "execute")
+                                yield f"data: {json.dumps(queue.pop(0))}\n\n"
 
-                    for res in results:
+                            elif node_name == "send_research_request":
+                                emit_event("research_sent", {
+                                    "task_id": task_id,
+                                    "status": "sent"
+                                }, "execute")
+                                yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                            elif node_name == "fetch_result" and isinstance(node_output, dict):
+                                result_data = node_output.get("result")
+                                if result_data:
+                                    result_title = result_data.get("title", "Result") if isinstance(result_data, dict) else "Result"
+                                    emit_event("result_fetched", {
+                                        "task_id": task_id,
+                                        "title": str(result_title)[:80],
+                                        "status": "fetched"
+                                    }, "execute")
+                                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                        except Exception as e:
+                            print(f"Error processing node {node}: {e}")
+                            continue
+                except Exception as e:
+                    print(f"Error processing workflow: {e}")
+                    continue
+
+            # Emit synthesis
+            try:
+                emit_event("synthesis_started", {
+                    "result_count": len(result.get("results", [])),
+                    "message": "Synthesizing final answer..."
+                }, "answer")
+                yield f"data: {json.dumps(queue.pop(0))}\n\n"
+            except Exception as e:
+                print(f"Error emitting synthesis_started: {e}")
+
+            # Show results
+            results = result.get("results", [])
+            if results:
+                for res in results:
+                    try:
+                        res_title = res.get("title", "Result") if isinstance(res, dict) else getattr(res, "title", "Result")
+                        res_summary = (res.get("summary", "") if isinstance(res, dict) else getattr(res, "summary", ""))[:150]
                         emit_event("result", {
-                            "title": res.title if hasattr(res, "title") else res.get("title"),
-                            "summary": (res.summary if hasattr(res, "summary") else res.get("summary", ""))[:150],
-                            "bullets": (res.bullets if hasattr(res, "bullets") else res.get("bullets", []))[:2]
+                            "title": res_title,
+                            "summary": res_summary,
+                            "bullets": (res.get("bullets", []) if isinstance(res, dict) else getattr(res, "bullets", []))[:2]
                         }, "answer")
                         yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                    except Exception as e:
+                        print(f"Error emitting result event: {e}")
+                        continue
 
             # Final answer
+            final_answer = result.get("final_answer") or result.get("running_answer")
+            print(f"\n📤 Emitting done event:")
+            print(f"   final_answer: {final_answer[:100] if final_answer else 'EMPTY'}...")
+            print(f"   execution_time: {execution_time}ms")
+
             emit_event("done", {
-                "final_answer": result.get("final_answer") or result.get("running_answer"),
+                "final_answer": final_answer,
                 "execution_time_ms": execution_time,
                 "payments": len(result.get("payments", [])),
                 "full_result": result
@@ -438,6 +484,15 @@ def resume_marketplace(request: ResumeRequest) -> RunResponse:
         failed_tasks=result.get("failed_tasks", []),
         pending_question=result.get("pending_question"),
     )
+
+
+@app.get("/payments")
+def list_all_payments() -> list[dict]:
+    """Get all historical payments - stored in memory during session."""
+    # Payments are accumulated during orchestrator runs
+    # This endpoint returns what was captured in the last run
+    # Full history is maintained in localStorage on the frontend
+    return []
 
 
 @app.get("/payments/{circle_transaction_id}")

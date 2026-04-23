@@ -32,7 +32,7 @@ def _synthesize_with_llm(goal: str, results: list, user_goal: str) -> str:
                     "content": f"User goal: {user_goal}\n\nResearch results:\n{result_text}",
                 },
             ],
-            max_tokens=512,
+            max_tokens=settings.synthesizer_max_tokens,
             temperature=0.3,
         )
         return completion.choices[0].message.content or None
@@ -45,16 +45,11 @@ def synthesize_answer(state: OrchestratorState) -> dict:
     results = state.get("results", [])
     failed_tasks = state.get("failed_tasks", [])
 
-    if state.get("is_conversational") and state.get("direct_answer"):
-        running_answer = state.get("direct_answer")
-        final_answer = running_answer
-        return {
-            "running_answer": running_answer,
-            "final_answer": final_answer,
-        }
+    print(f"\n🔄 synthesize_answer: results={len(results)}, failed_tasks={len(failed_tasks)}")
 
     if not results:
         final_answer = "No research results were found."
+        print(f"  ✓ No results - returning default message")
         return {
             "running_answer": final_answer,
             "final_answer": final_answer,
@@ -62,8 +57,10 @@ def synthesize_answer(state: OrchestratorState) -> dict:
 
     llm_synthesis = _synthesize_with_llm(user_goal, results, user_goal)
     if llm_synthesis:
+        print(f"  ✓ LLM synthesis succeeded")
         running_answer = llm_synthesis
     else:
+        print(f"  ℹ️ LLM synthesis failed, using fallback")
         lines = []
         if user_goal:
             lines.append(f"**Research Goal:** {user_goal}\n")
@@ -98,12 +95,8 @@ def synthesize_answer(state: OrchestratorState) -> dict:
 
         running_answer = "\n".join(lines).strip() if lines else "No results available."
 
-    finished = len(results) + len(failed_tasks)
-    expected = len(state.get("task_specs", []))
-    final_answer = running_answer if expected and finished >= expected else None
-
     return {
         "running_answer": running_answer,
-        "final_answer": final_answer,
+        "final_answer": running_answer,
     }
 

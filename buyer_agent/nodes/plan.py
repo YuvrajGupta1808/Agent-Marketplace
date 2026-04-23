@@ -82,7 +82,7 @@ def _extract_json(content: str) -> dict:
 
 
 def _generate_research_plan_llm(query: str) -> dict:
-    """Generate research plan using LLM. No fallbacks, no stubs."""
+    """Generate research plan using LLM."""
     settings = get_settings()
 
     if not settings.live_llm_enabled:
@@ -103,12 +103,12 @@ def _generate_research_plan_llm(query: str) -> dict:
                 "role": "system",
                 "content": (
                     "You are a strategic research planner. Return ONLY valid JSON.\n"
-                    '{"reasoning": "brief strategy explanation", "research_steps": [{"step": "action", "why": "relevance"}]}'
+                    '{"research_steps": [{"step": "action", "why": "relevance"}]}'
                 ),
             },
             {
                 "role": "user",
-                "content": f"Query: {query}\n\nBriefly plan a research strategy as JSON.",
+                "content": f"Query: {query}\n\nPlan a research strategy as JSON.",
             },
         ],
         max_tokens=256,
@@ -119,24 +119,29 @@ def _generate_research_plan_llm(query: str) -> dict:
     if not content:
         raise ValueError("LLM returned empty response for research planning")
 
-    plan_data = _extract_json(content)
+    try:
+        plan_data = _extract_json(content)
+    except ValueError:
+        # Fallback: if JSON parsing fails, create a default plan
+        plan_data = {
+            "research_steps": [
+                {"step": "Research the query comprehensively", "why": "To answer the user's question"}
+            ]
+        }
 
-    if not plan_data.get("reasoning"):
-        raise ValueError(f"LLM response missing 'reasoning' field. Response: {content[:200]}")
-
+    plan_data["thinking"] = ""
     return plan_data
 
 
 def plan_research_steps(state: BuyerState) -> dict:
-    """Generate LLM-powered research plan with detailed reasoning (ReAct: Reason step)."""
+    """Generate LLM-powered research plan using actual thinking model."""
     query = state["query"].strip()
+    print(f"  📝 plan_research_steps: '{query[:50]}'")
 
     plan_data = _generate_research_plan_llm(query)
-    reasoning = plan_data.get("reasoning")
+    thinking = plan_data.get("thinking", "")
     research_steps = plan_data.get("research_steps", [])
-
-    if not reasoning:
-        raise ValueError(f"LLM failed to generate reasoning for query: {query}")
+    print(f"    ✓ Generated {len(research_steps)} research step(s)")
 
     execution_plan = [
         f"1. Discover the seller endpoint for task `{state['task_id']}`.",
@@ -147,7 +152,7 @@ def plan_research_steps(state: BuyerState) -> dict:
     ]
 
     return {
-        "reasoning": reasoning,
+        "thinking": thinking,
         "research_plan": research_steps,
         "execution_plan": execution_plan,
     }

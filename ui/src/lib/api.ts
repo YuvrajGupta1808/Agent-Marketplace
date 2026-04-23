@@ -37,6 +37,8 @@ export interface PaymentRecord {
   amount_usdc: string;
   tx_hash?: string | null;
   state: string;
+  created_at?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface GraphNodeOutput {
@@ -236,40 +238,94 @@ export async function runMarketplaceStream(
   }
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    let eventCount = 0;
+    let buffer = "";
 
-      const text = decoder.decode(value, { stream: true });
-      const lines = text.split("\n");
+    const processEventPayload = (rawPayload: string) => {
+      const data = rawPayload.trim();
+      if (!data) return;
 
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6).trim();
-          if (!data) continue;
+      // SSE keepalive messages can be sent as "[DONE]".
+      if (data === "[DONE]") return;
 
-          try {
-            const event: StreamEvent = JSON.parse(data);
-            onEvent(event);
+      try {
+        const event: StreamEvent = JSON.parse(data);
+        eventCount++;
+        console.log(`[runMarketplaceStream] Event ${eventCount}: type=${event.type}`);
+        onEvent(event);
 
-            if (event.type === "done") {
-              finalResult = event.data.full_result as RunResponse;
-              if (finalResult && !finalResult.thread_id) {
-                finalResult.thread_id = threadId;
-              }
-            }
-          } catch (err) {
-            console.error("Failed to parse SSE event:", data, err);
+        if (event.type === "done") {
+          console.log("[runMarketplaceStream] Done event received, extracting full_result");
+          finalResult = (event.data.full_result as RunResponse | undefined) ?? finalResult;
+          if (finalResult && !finalResult.thread_id) {
+            finalResult.thread_id = threadId;
+          }
+          return;
+        }
+
+        // Fallback: some servers emit final payloads under alternate event names.
+        if (!finalResult && (event.type === "result" || event.type === "final")) {
+          const maybeResult = (event.data.full_result ?? event.data) as Partial<RunResponse>;
+          if (maybeResult && typeof maybeResult === "object" && "results" in maybeResult) {
+            finalResult = {
+              thread_id: (maybeResult.thread_id as string) ?? threadId,
+              final_answer: (maybeResult.final_answer as string | null | undefined) ?? null,
+              running_answer: (maybeResult.running_answer as string | null | undefined) ?? null,
+              query_intent: maybeResult.query_intent as string | undefined,
+              is_conversational: maybeResult.is_conversational as boolean | undefined,
+              task_specs: (maybeResult.task_specs as RunResponse["task_specs"]) ?? [],
+              results: (maybeResult.results as RunResponse["results"]) ?? [],
+              buyer_workflows: (maybeResult.buyer_workflows as RunResponse["buyer_workflows"]) ?? [],
+              transaction_hashes: (maybeResult.transaction_hashes as string[]) ?? [],
+              payments: (maybeResult.payments as RunResponse["payments"]) ?? [],
+              failed_tasks: (maybeResult.failed_tasks as string[]) ?? [],
+              pending_question: (maybeResult.pending_question as string | null | undefined) ?? null,
+            };
           }
         }
+      } catch (err) {
+        console.error("Failed to parse SSE event:", data, err);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log(`[runMarketplaceStream] SSE stream ended. Total events received: ${eventCount}`);
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const block of events) {
+        const dataLines = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.replace(/^data:\s?/, ""));
+
+        if (dataLines.length === 0) continue;
+        processEventPayload(dataLines.join("\n"));
       }
     }
+
+    if (buffer.trim()) {
+      const dataLines = buffer
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.replace(/^data:\s?/, ""));
+      if (dataLines.length > 0) {
+        processEventPayload(dataLines.join("\n"));
+      }
+    }
+
   } finally {
     reader.releaseLock();
   }
 
   if (!finalResult) {
-    throw new Error("Stream ended without final result");
+    throw new Error("Stream ended without a complete result. Please retry.");
   }
 
   return finalResult;

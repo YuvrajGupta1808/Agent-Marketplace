@@ -25,8 +25,7 @@ export function Dashboard() {
     selectedSellerId,
     sellerAgents,
     setSelectedSellerId,
-    streamEvents,
-    isStreaming,
+    allPayments,
   } = useAppState();
 
   return (
@@ -35,7 +34,7 @@ export function Dashboard() {
         orientation="horizontal"
         className="min-h-0 min-w-0 w-full flex-1"
       >
-        <Panel defaultSize={65} minSize={30} className="min-h-0 min-w-0">
+        <Panel defaultSize={40} minSize={25} className="min-h-0 min-w-0">
           <PanelGroup
             orientation="vertical"
             className="h-full min-h-0 min-w-0 w-full"
@@ -47,7 +46,6 @@ export function Dashboard() {
                   sellerAgents={sellerAgents}
                   selectedSellerId={selectedSellerId}
                   latestRun={latestRun}
-                  streamEvents={streamEvents}
                 />
               </div>
             </Panel>
@@ -56,7 +54,7 @@ export function Dashboard() {
 
             <Panel defaultSize={30} minSize={20} className="min-h-0 min-w-0">
               <div className="h-full min-h-0 w-full overflow-hidden bg-white">
-                <TransactionHistory payments={latestRun?.payments ?? []} />
+                <TransactionHistory payments={allPayments} latestRun={latestRun} />
               </div>
             </Panel>
           </PanelGroup>
@@ -64,7 +62,7 @@ export function Dashboard() {
 
         <ResizeHandle />
 
-        <Panel defaultSize={35} minSize={25} className="min-h-0 min-w-0">
+        <Panel defaultSize={60} minSize={35} className="min-h-0 min-w-0">
           <div className="h-full min-h-0 w-full overflow-hidden bg-white">
             <ChatInterface
               buyer={currentBuyer}
@@ -73,8 +71,6 @@ export function Dashboard() {
               setSelectedSellerId={(sellerId) => setSelectedSellerId(sellerId || null)}
               onRunWorkflow={runBuyerWorkflow}
               isCircleEnabled={Boolean(health?.circle_enabled)}
-              streamEvents={streamEvents}
-              isStreaming={isStreaming}
             />
           </div>
         </Panel>

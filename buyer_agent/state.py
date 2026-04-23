@@ -10,7 +10,7 @@ class BuyerState(TypedDict, total=False):
     query: str
     query_intent: str
     retry_count: int
-    reasoning: str
+    thinking: str
     research_plan: list[dict]
     execution_plan: list[str]
     current_phase: str

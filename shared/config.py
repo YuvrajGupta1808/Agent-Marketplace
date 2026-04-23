@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     featherless_base_url: str = "https://api.featherless.ai/v1"
     orchestrator_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     seller_model: str = "meta-llama/Llama-3.1-8B-Instruct"
+    thinking_model: str = "Qwen/QwQ-32B-Preview"
+    seller_max_tokens: int = 1400
+    synthesizer_max_tokens: int = 1600
 
     circle_api_key: SecretStr | None = None
     circle_entity_secret: SecretStr | None = None
