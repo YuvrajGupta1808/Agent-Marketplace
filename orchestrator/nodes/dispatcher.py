@@ -8,6 +8,10 @@ from orchestrator.state import OrchestratorState
 def route_from_planner(state: OrchestratorState):
     if state.get("pending_question"):
         return "ask_clarification"
+
+    if state.get("is_conversational") and state.get("direct_answer"):
+        return "synthesize_answer"
+
     return [
         Send(
             "buyer_agent_node",

@@ -16,9 +16,11 @@ load_dotenv(Path(__file__).parent / ".env", override=True)
 from api.server import app as api_app
 from seller_agent.server import app as seller_app
 from shared.config import get_settings
+from shared.ssl import configure_ssl_cert_file
 
 # Clear cached settings to ensure fresh load from .env
 get_settings.cache_clear()
+configure_ssl_cert_file()
 
 st.set_page_config(
     page_title="Agent Marketplace",
@@ -27,28 +29,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Global API Client (reused across requests) ──────────────────────────────
-
-@st.cache_resource
-def get_api_client():
-    """Create and cache a single API client for all requests."""
-    with patch("httpx.Client", SellerProxy):
-        return TestClient(api_app, raise_server_exceptions=False)
-
-# ── Session State Initialization ──────────────────────────────────────────────
-
-def init_session_state():
-    st.session_state.setdefault("current_user", None)
-    st.session_state.setdefault("current_buyer", None)
-    st.session_state.setdefault("current_seller", None)
-    st.session_state.setdefault("buyer_wallet_address", None)
-    st.session_state.setdefault("buyer_wallet_funded", False)
-    st.session_state.setdefault("research_results", None)
-    st.session_state.setdefault("research_error", None)
-
-init_session_state()
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Apply httpx.Client patch globally for entire session ──────────────────────
 
 class SellerProxy:
     def __init__(self, *_: Any, **__: Any) -> None:
@@ -70,14 +51,32 @@ class SellerProxy:
             path = url
         return self._inner.post(path, **kwargs)
 
-    def post(self, url: str, **kwargs):
-        if "://" in url:
-            path = url.split("://", 1)[1].split("/", 1)[1]
-            path = "/" + path
-        else:
-            path = url
-        return self._inner.post(path, **kwargs)
 
+# Start the patch at module level so it's active for the entire session
+_patcher = patch("httpx.Client", SellerProxy)
+_patcher.start()
+
+# ── Global API Client (reused across requests) ──────────────────────────────
+
+@st.cache_resource
+def get_api_client():
+    """Create and cache a single API client for all requests."""
+    return TestClient(api_app, raise_server_exceptions=False)
+
+# ── Session State Initialization ──────────────────────────────────────────────
+
+def init_session_state():
+    st.session_state.setdefault("current_user", None)
+    st.session_state.setdefault("current_buyer", None)
+    st.session_state.setdefault("current_seller", None)
+    st.session_state.setdefault("buyer_wallet_address", None)
+    st.session_state.setdefault("buyer_wallet_funded", False)
+    st.session_state.setdefault("research_results", None)
+    st.session_state.setdefault("research_error", None)
+
+init_session_state()
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def api_request(
     method: str,
@@ -99,17 +98,148 @@ def api_request(
     return response.json()
 
 
+BUYER_WORKFLOW_STEPS = [
+    ("discover_seller", "Discover Seller", "Resolve the seller endpoint and wallet."),
+    ("plan_research", "Plan Buyer Steps", "Prepare the buyer-side execution plan."),
+    ("execute_payment", "Execute Payment", "Authorize and settle the payment."),
+    ("send_research", "Send Research", "Send the paid request to the seller."),
+    ("fetch_result", "Fetch Result", "Normalize the final research result."),
+]
+
+
+def render_buyer_workflow_panel(result: dict[str, Any] | None = None) -> None:
+    """Render the buyer agent workflow reflected in the LangGraph graph."""
+    if not result:
+        st.info("Run the workflow to see the buyer graph values.")
+        return
+
+    payments = result.get("payments", [])
+    results = result.get("results", [])
+    workflows = result.get("buyer_workflows", [])
+
+    with st.expander("🤖 Buyer Agent Workflow", expanded=True):
+        if workflows:
+            for workflow in workflows:
+                task_id = workflow.get("task_id", "task")
+                st.write(f"**Task:** `{task_id}`")
+                node_outputs = workflow.get("node_outputs", [])
+                if node_outputs:
+                    for index, node_output in enumerate(node_outputs, 1):
+                        title = node_output.get("title", f"Step {index}")
+                        input_state = node_output.get("input_state", {})
+                        payload = node_output.get("output", {})
+                        state_after = node_output.get("state_after", {})
+                        has_output = any(value not in (None, "", [], {}) for value in payload.values())
+                        status = "✅" if has_output else "⏳"
+
+                        with st.expander(f"{status} {index}. {title}", expanded=True):
+                            st.write("**Input State**")
+                            if input_state:
+                                st.json(input_state)
+                            else:
+                                st.caption("No input state captured.")
+
+                            st.write("**Output**")
+                            if payload:
+                                st.json(payload)
+                            else:
+                                st.caption("No output captured for this node.")
+
+                            st.write("**State After**")
+                            if state_after:
+                                st.json(state_after)
+                            else:
+                                st.caption("No post-node state captured.")
+                    st.divider()
+                    continue
+
+                steps = workflow.get("execution_plan", [])
+                if not steps:
+                    st.info("No buyer execution steps were returned for this task.")
+                    continue
+
+                completed_count = 2
+                if payments:
+                    completed_count = 3
+                if results:
+                    completed_count = 5
+
+                for index, step in enumerate(steps, 1):
+                    status = "✅" if index <= completed_count else "⏳"
+                    st.write(f"{status} {step}")
+                st.divider()
+            return
+
+        completed_steps = set()
+        if result:
+            completed_steps.update({"discover_seller", "plan_research"})
+        if payments:
+            completed_steps.add("execute_payment")
+        if results:
+            completed_steps.update({"send_research", "fetch_result"})
+
+        for step_id, title, description in BUYER_WORKFLOW_STEPS:
+            status = "✅" if step_id in completed_steps else "⏳"
+            st.write(f"{status} **{title}**")
+            st.caption(description)
+
+
+def render_plan_panel(goal: str, result: dict[str, Any]) -> None:
+    """Render the planned tasks returned by the marketplace flow."""
+    task_specs = result.get("task_specs", [])
+    results = result.get("results", [])
+    payments = result.get("payments", [])
+
+    with st.expander("📋 Orchestrator Task Plan", expanded=True):
+        st.write(f"**Goal:** {goal}")
+        if task_specs:
+            st.write("**Tasks Created:**")
+            for i, spec in enumerate(task_specs, 1):
+                query = spec.get("query", "Research task")
+                st.write(f"{i}. Task `{spec.get('task_id', f'task-{i}')}`: {query}")
+        elif results:
+            st.write("**Completed Tasks:**")
+            for i, res in enumerate(results, 1):
+                st.write(f"{i}. Task `{res.get('task_id', f'task-{i}')}`: {res.get('title', 'Research task')}")
+        elif payments:
+            st.write("**Executed Tasks:**")
+            for i, payment in enumerate(payments, 1):
+                st.write(f"{i}. Task `{payment.get('task_id', f'task-{i}')}`: {goal}")
+        else:
+            st.info("No plan items were returned for this run.")
+
+
+def render_payment_panel(result: dict[str, Any]) -> None:
+    """Render payment records and explorer links for the current run."""
+    payments = result.get("payments", [])
+
+    with st.expander("💳 Payments & Transactions", expanded=True):
+        if not payments:
+            st.info("No payment records were returned for this run.")
+            return
+
+        for i, payment in enumerate(payments, 1):
+            st.write(f"**Payment {i}:** {payment.get('amount_usdc')} USDC")
+            st.write(f"Status: `{payment.get('state')}`")
+            if payment.get("circle_transaction_id"):
+                st.write(f"Circle TX: `{payment['circle_transaction_id']}`")
+            if payment.get("tx_hash") and payment.get("tx_hash") != "0x" + "0" * 64:
+                explorer = f"https://testnet.arcscan.app/tx/{payment['tx_hash']}"
+                st.markdown(f"[🔗 View on Arc Explorer]({explorer})")
+            st.divider()
+
+
 # ── Main UI ───────────────────────────────────────────────────────────────────
 
 st.title("🤖 Agent Marketplace")
-st.markdown("Complete flow: User → Register → Fund Wallet → Plan Research → Payment → Results")
+st.markdown("Complete flow: User → Register → Fund Wallet → Buyer Workflow → Results")
 
 # Create tabs for the flow
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1️⃣ Register User",
     "2️⃣ Setup Agents",
     "3️⃣ Fund Wallet",
-    "4️⃣ Plan & Pay",
+    "4️⃣ Buyer Workflow",
     "5️⃣ Results"
 ])
 
@@ -309,14 +439,13 @@ with tab3:
 
 # ── TAB 4: Plan & Pay ─────────────────────────────────────────────────────────
 with tab4:
-    st.header("🔄 Plan Research & Execute Payment")
+    st.header("🔄 Buyer Workflow: Discover, Plan, Pay, Send & Fetch")
 
     if not st.session_state.current_buyer or not st.session_state.current_seller:
         st.warning("⚠️ Setup both agents in Tab 2 first")
     elif not st.session_state.buyer_wallet_funded:
         st.warning("⚠️ Fund wallet in Tab 3 first")
     else:
-        user = st.session_state.current_user
         buyer = st.session_state.current_buyer
         seller = st.session_state.current_seller
 
@@ -328,34 +457,64 @@ with tab4:
             key="user_goal"
         )
 
+        if not st.session_state.research_results:
+            render_buyer_workflow_panel()
+
         if st.button("🚀 Start Research Flow", key="btn_start_research", use_container_width=True):
+            thread_id = f"demo-{uuid.uuid4().hex[:8]}"
+
+            # Create placeholders for streaming updates
+            status_placeholder = st.empty()
+            workflow_container = st.container()
+            plan_container = st.container()
+            payment_container = st.container()
+
             try:
-                with st.spinner("🔄 Executing research flow..."):
-                    st.info("Step 1: 📋 Planning research tasks...")
+                status_placeholder.info(
+                    "🔄 Buyer agent running: discover seller → plan steps → execute payment → send research → fetch result..."
+                )
 
-                    st.info("Step 2: 💳 Buyer initiating payment to research agent...")
-
-                    st.info("Step 3: 🔬 Research agent executing query...")
-
-                    st.info("Step 4: 📊 Synthesizing results...")
-
-                    # Execute the marketplace flow
-                    result = api_request("POST", "/run", {
+                # Call the research flow API
+                result = api_request(
+                    "POST",
+                    "/run",
+                    {
                         "user_goal": user_goal,
-                        "thread_id": f"demo-{uuid.uuid4().hex[:8]}",
+                        "thread_id": thread_id,
                         "buyer_agent_id": buyer["id"],
                         "seller_agent_id": seller["id"]
-                    })
+                    }
+                )
 
-                    st.session_state.research_results = result
-                    st.session_state.research_error = None
+                status_placeholder.success(
+                    "✅ Buyer agent completed: discover seller → plan steps → execute payment → send research → fetch result"
+                )
+                with workflow_container:
+                    render_buyer_workflow_panel(result)
 
-                    st.success("✅ Research flow completed!")
-                    st.rerun()
+                with plan_container:
+                    render_plan_panel(user_goal, result)
+
+                with payment_container:
+                    render_payment_panel(result)
+
+                # Store and show final results
+                st.session_state.research_results = result
+                st.session_state.research_error = None
+                st.rerun()
 
             except Exception as e:
+                st.session_state.research_results = None
                 st.session_state.research_error = str(e)
                 st.error(f"❌ Error: {e}")
+
+        if st.session_state.research_results:
+            st.subheader("📌 Most Recent Run")
+            render_buyer_workflow_panel(st.session_state.research_results)
+            render_plan_panel(user_goal, st.session_state.research_results)
+            render_payment_panel(st.session_state.research_results)
+        elif st.session_state.research_error:
+            st.error(f"❌ {st.session_state.research_error}")
 
 
 # ── TAB 5: Results ────────────────────────────────────────────────────────────
@@ -375,28 +534,41 @@ with tab5:
             st.subheader("✅ Final Answer")
             st.markdown(result["final_answer"])
 
-        # Payments
+        # Payments with proof
         payments = result.get("payments", [])
         if payments:
             st.subheader(f"💳 Payments ({len(payments)})")
             for i, payment in enumerate(payments, 1):
-                with st.expander(f"Payment {i}: {payment.get('task_id')}"):
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Amount", f"{payment.get('amount_usdc')} USDC")
-                    with col2:
-                        st.metric("State", payment.get('state'))
-                    with col3:
-                        st.metric("Transaction", payment.get('circle_transaction_id', 'N/A')[:20])
-                    with col4:
-                        st.metric("TX Hash", payment.get('tx_hash', 'N/A')[:20])
+                with st.expander(f"Payment {i}: {payment.get('task_id')} - {payment.get('state')}"):
+                    st.write(f"**Amount:** {payment.get('amount_usdc')} USDC")
+                    st.write(f"**Status:** {payment.get('state')}")
+
+                    # Circle Transaction ID
+                    circle_tx = payment.get('circle_transaction_id', '')
+                    if circle_tx:
+                        st.write(f"**Circle Transaction ID:** `{circle_tx}`")
+
+                    # On-chain TX Hash with explorer link
+                    tx_hash = payment.get('tx_hash', '')
+                    if tx_hash and tx_hash != '0x' + '0' * 64:
+                        st.write(f"**On-Chain TX Hash:** `{tx_hash}`")
+                        explorer_url = f"https://testnet.arcscan.app/tx/{tx_hash}"
+                        st.markdown(f"[🔍 View on Arc Explorer]({explorer_url})")
+                    else:
+                        st.write("**On-Chain TX Hash:** Pending confirmation...")
 
         # Transaction Hashes
         tx_hashes = result.get("transaction_hashes", [])
         if tx_hashes:
             st.subheader(f"🔗 On-Chain Transactions ({len(tx_hashes)})")
             for tx_hash in tx_hashes:
-                st.code(tx_hash)
+                if tx_hash and tx_hash != '0x' + '0' * 64:
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.code(tx_hash)
+                    with col2:
+                        explorer_url = f"https://testnet.arcscan.app/tx/{tx_hash}"
+                        st.markdown(f"[View ↗]({explorer_url})")
 
         # Debug Info
         with st.expander("🔍 Debug Info"):
@@ -438,6 +610,6 @@ st.sidebar.info("""
 1. Register user
 2. Create buyer & seller
 3. Fund buyer wallet
-4. Submit research query
+4. Run buyer workflow
 5. View results & payments
 """)

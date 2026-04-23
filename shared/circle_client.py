@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_DOWN
 from typing import Any
 
 from shared.config import get_settings
+from shared.ssl import configure_ssl_cert_file
 
 
 @dataclass(slots=True)
@@ -39,6 +40,7 @@ class CircleClient:
         self.settings = get_settings()
         if not self.settings.circle_enabled:
             raise RuntimeError("CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET must be configured.")
+        configure_ssl_cert_file()
         try:
             from circle.web3 import utils
         except ImportError as exc:

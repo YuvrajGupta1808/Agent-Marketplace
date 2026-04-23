@@ -46,6 +46,13 @@ class MarketplaceRepository:
             )
         return user
 
+    def list_users(self) -> list[UserRecord]:
+        with db_cursor() as connection:
+            rows = connection.execute(
+                "SELECT * FROM users ORDER BY created_at DESC"
+            ).fetchall()
+        return [UserRecord(**dict(row)) for row in rows]
+
     def get_user(self, user_id: str) -> UserRecord:
         with db_cursor() as connection:
             row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -54,6 +61,24 @@ class MarketplaceRepository:
         return UserRecord(**dict(row))
 
     def list_agents_for_user(self, user_id: str) -> list[AgentRecord]:
+        return self.list_agents(user_id=user_id)
+
+    def list_agents(
+        self,
+        *,
+        user_id: str | None = None,
+        role: str | None = None,
+    ) -> list[AgentRecord]:
+        conditions: list[str] = []
+        params: list[str] = []
+        if user_id:
+            conditions.append("a.user_id = ?")
+            params.append(user_id)
+        if role:
+            conditions.append("a.role = ?")
+            params.append(role)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
         with db_cursor() as connection:
             rows = connection.execute(
                 """
@@ -73,10 +98,10 @@ class MarketplaceRepository:
                     w.address
                 FROM agents a
                 JOIN wallets w ON w.id = a.wallet_id
-                WHERE a.user_id = ?
+                {where_clause}
                 ORDER BY a.created_at ASC
-                """,
-                (user_id,),
+                """.format(where_clause=where_clause),
+                tuple(params),
             ).fetchall()
         return [self._agent_from_row(row) for row in rows]
 

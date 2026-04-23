@@ -104,14 +104,46 @@ class PaymentRecord(BaseModel):
     state: str = "INITIATED"
 
 
+class GraphNodeOutput(BaseModel):
+    node_name: str
+    title: str
+    phase: str = "execute"
+    status: str = "done"
+    duration_ms: int | None = None
+    reasoning: str = ""
+    input_state: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+    state_after: dict[str, Any] = Field(default_factory=dict)
+
+
+class BuyerWorkflowRecord(BaseModel):
+    task_id: str
+    execution_plan: list[str] = Field(default_factory=list)
+    node_outputs: list[GraphNodeOutput] = Field(default_factory=list)
+
+
 class RunResponse(BaseModel):
     thread_id: str
     final_answer: str | None = None
     running_answer: str | None = None
+    query_intent: str = "research"
+    is_conversational: bool = False
+    task_specs: list[TaskSpec] = Field(default_factory=list)
+    results: list[ResearchResult] = Field(default_factory=list)
+    buyer_workflows: list[BuyerWorkflowRecord] = Field(default_factory=list)
     transaction_hashes: list[str] = Field(default_factory=list)
     payments: list[PaymentRecord] = Field(default_factory=list)
     failed_tasks: list[str] = Field(default_factory=list)
     pending_question: str | None = None
+
+
+class StreamEvent(BaseModel):
+    type: Literal["query_intent", "tasks_planned", "direct_answer", "buyer_start", "node_start", "node_done", "payment_initiated", "payment_settled", "research_sent", "result_received", "synthesis_start", "done", "error"]
+    task_id: str | None = None
+    node_name: str | None = None
+    phase: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    timestamp_ms: int = 0
 
 
 class CreateUserResponse(BaseModel):

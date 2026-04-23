@@ -130,21 +130,15 @@ class CirclePaymentClient:
         )
         message = typed_data["message"]
 
-        # Use real Circle signing if available, otherwise stub
-        if settings.circle_enabled:
-            try:
-                signed: CircleSignedPayload = get_circle_client().sign_typed_data(
-                    wallet_id=buyer_wallet_id,
-                    typed_data=typed_data,
-                    memo="Marketplace payment authorization",
-                )
-                signature = signed.signature
-            except Exception:
-                # Fallback to stub signature for testing
-                signature = f"stub_sig_{buyer_wallet_id[:8]}"
-        else:
-            # Stub signature for testing
-            signature = f"stub_sig_{buyer_wallet_id[:8]}"
+        if not settings.circle_enabled:
+            raise RuntimeError("Circle credentials are required for payment signing.")
+
+        signed: CircleSignedPayload = get_circle_client().sign_typed_data(
+            wallet_id=buyer_wallet_id,
+            typed_data=typed_data,
+            memo="Marketplace payment authorization",
+        )
+        signature = signed.signature
 
         return PaymentAuthorization(
             buyer_agent_id=buyer_agent_id,
@@ -163,31 +157,19 @@ class CirclePaymentClient:
 
     def settle_payment(self, buyer_wallet_id: str, seller_wallet_address: str, amount_usdc: str, ref_id: str) -> PaymentReceipt:
         settings = get_settings()
+        if not settings.circle_enabled:
+            raise RuntimeError("Circle credentials are required for payment settlement.")
 
-        if settings.circle_enabled:
-            try:
-                transfer: CircleTransferResult = get_circle_client().create_transfer(
-                    wallet_id=buyer_wallet_id,
-                    destination_address=seller_wallet_address,
-                    amount_usdc=amount_usdc,
-                    ref_id=ref_id,
-                )
-                return PaymentReceipt(
-                    transaction_id=transfer.transaction_id,
-                    transaction_state=transfer.state,
-                    tx_hash=transfer.tx_hash,
-                    amount_usdc=amount_usdc,
-                    pay_to=seller_wallet_address,
-                )
-            except Exception:
-                pass
-
-        # Stub payment for testing
-        import uuid
+        transfer: CircleTransferResult = get_circle_client().create_transfer(
+            wallet_id=buyer_wallet_id,
+            destination_address=seller_wallet_address,
+            amount_usdc=amount_usdc,
+            ref_id=ref_id,
+        )
         return PaymentReceipt(
-            transaction_id=f"stub_{uuid.uuid4().hex[:8]}",
-            transaction_state="CONFIRMED",
-            tx_hash=f"0x{'0' * 64}",
+            transaction_id=transfer.transaction_id,
+            transaction_state=transfer.state,
+            tx_hash=transfer.tx_hash,
             amount_usdc=amount_usdc,
             pay_to=seller_wallet_address,
         )

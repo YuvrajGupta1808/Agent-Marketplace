@@ -1,0 +1,35 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { Navbar } from "./components/layout/Navbar";
+import { Builder } from "./pages/Builder";
+import { Dashboard } from "./pages/Dashboard";
+import { Home as Marketplace } from "./pages/Home";
+import { Landing } from "./pages/Landing";
+import { Login } from "./pages/Login";
+import { Register } from "./pages/Register";
+import { Wallet } from "./pages/Wallet";
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <div className="min-h-screen bg-white text-gray-900 flex flex-col font-sans">
+        <Navbar />
+        <main className="flex min-h-0 flex-1 flex-col">
+          <Routes>
+            <Route path="/" element={<Landing />} />
+            <Route path="/marketplace" element={<Marketplace />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/builder" element={<Builder />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/wallet" element={<Wallet />} />
+          </Routes>
+        </main>
+      </div>
+    </BrowserRouter>
+  );
+}

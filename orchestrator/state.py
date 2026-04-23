@@ -5,7 +5,7 @@ from typing import Annotated
 
 from typing_extensions import TypedDict
 
-from shared.types import PaymentRecord, ResearchResult, TaskSpec
+from shared.types import BuyerWorkflowRecord, PaymentRecord, ResearchResult, TaskSpec
 
 
 class OrchestratorState(TypedDict, total=False):
@@ -13,8 +13,12 @@ class OrchestratorState(TypedDict, total=False):
     thread_id: str
     buyer_agent_id: str
     seller_agent_id: str
+    query_intent: str
+    is_conversational: bool
+    direct_answer: str | None
     task_specs: list[TaskSpec]
     results: Annotated[list[ResearchResult], operator.add]
+    buyer_workflows: Annotated[list[BuyerWorkflowRecord], operator.add]
     failed_tasks: Annotated[list[str], operator.add]
     transaction_hashes: Annotated[list[str], operator.add]
     payments: Annotated[list[PaymentRecord], operator.add]
@@ -22,3 +26,4 @@ class OrchestratorState(TypedDict, total=False):
     clarification_answer: str | None
     running_answer: str
     final_answer: str | None
+    conversation_history: list[dict]

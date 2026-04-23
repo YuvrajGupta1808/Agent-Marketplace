@@ -6,16 +6,15 @@ from buyer_agent.state import BuyerState
 from shared.config import get_settings
 from shared.x402_client import (
     PAYMENT_REQUIRED_HEADER,
-    PAYMENT_RESPONSE_HEADER,
-    PAYMENT_SIGNATURE_HEADER,
-    PAYMENT_TX_ID_HEADER,
     PaymentOffer,
-    PaymentReceipt,
     get_x402_client,
 )
 
 
 def execute_payment(state: BuyerState) -> dict:
+    if state.get("error"):
+        return {"error": state["error"]}
+
     settings = get_settings()
 
     with httpx.Client(timeout=settings.request_timeout_seconds) as client:
@@ -47,26 +46,9 @@ def execute_payment(state: BuyerState) -> dict:
             amount_usdc=offer.amount_usdc,
             ref_id=f"{state['task_id']}:{state['seller_agent_id']}",
         )
-
-        paid = client.post(
-            state["seller_url"],
-            headers={
-                PAYMENT_SIGNATURE_HEADER: authorization.model_dump_json(),
-                PAYMENT_TX_ID_HEADER: receipt.transaction_id,
-            },
-            json={
-                "task_id": state["task_id"],
-                "query": state["query"],
-                "buyer_agent_id": state["buyer_agent_id"],
-                "seller_agent_id": state["seller_agent_id"],
-            },
-        )
-        if paid.status_code >= 400:
-            return {"error": f"Payment retry failed with {paid.status_code}: {paid.text}"}
-
-        seller_receipt = PaymentReceipt.model_validate_json(paid.headers[PAYMENT_RESPONSE_HEADER])
         return {
+            "execution_plan": state.get("execution_plan", []),
+            "payment_authorization": authorization.model_dump(),
             "payment_offer": offer.model_dump(),
-            "payment_receipt": seller_receipt.model_dump(),
-            "response_body": paid.json(),
+            "payment_receipt": receipt.model_dump(),
         }

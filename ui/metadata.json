@@ -1,0 +1,6 @@
+{
+  "name": "AgentFlow Marketplace",
+  "description": "A marketplace for AI agents with a react-flow visualizer for connections and transactions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

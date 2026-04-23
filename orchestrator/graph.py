@@ -3,19 +3,19 @@ from __future__ import annotations
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from buyer_agent.graph import buyer_graph
+from buyer_agent.graph import execute_buyer_graph_with_trace
 from orchestrator.nodes.clarifier import ask_clarification
 from orchestrator.nodes.dispatcher import route_from_planner
 from orchestrator.nodes.planner import plan_tasks
 from orchestrator.nodes.synthesizer import synthesize_answer
 from orchestrator.state import OrchestratorState
 from shared.repository import repository
-from shared.types import PaymentRecord, ResearchResult
+from shared.types import BuyerWorkflowRecord, PaymentRecord, ResearchResult
 
 
 def buyer_agent_node(state: dict) -> dict:
     buyer_agent = repository.get_agent(state["buyer_agent_id"])
-    result = buyer_graph.invoke(
+    result, trace = execute_buyer_graph_with_trace(
         {
             "task_id": state["task_id"],
             "query": state["query"],
@@ -26,8 +26,19 @@ def buyer_agent_node(state: dict) -> dict:
             "seller_agent_id": state["seller_agent_id"],
         },
     )
+    buyer_workflows = [
+        BuyerWorkflowRecord(
+            task_id=state["task_id"],
+            execution_plan=result.get("execution_plan", []),
+            node_outputs=trace,
+        )
+    ]
     if result.get("error"):
-        return {"failed_tasks": [state["task_id"]], "payments": []}
+        return {
+            "buyer_workflows": buyer_workflows,
+            "failed_tasks": [state["task_id"]],
+            "payments": [],
+        }
 
     research_result = ResearchResult.model_validate(result["result"])
     tx_hash = research_result.tx_hash
@@ -46,6 +57,7 @@ def buyer_agent_node(state: dict) -> dict:
 
     return {
         "results": [research_result],
+        "buyer_workflows": buyer_workflows,
         "transaction_hashes": [tx_hash] if tx_hash else [],
         "payments": payments,
         "failed_tasks": [],

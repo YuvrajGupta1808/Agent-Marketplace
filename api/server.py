@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from langgraph.types import Command
 
 try:
@@ -23,6 +24,7 @@ from shared.circle_client import get_circle_client
 from shared.config import get_settings
 from shared.provisioning import ensure_circle_wallet_set_id
 from shared.repository import repository
+from shared.ssl import configure_ssl_cert_file
 from shared.types import (
     CreateAgentRequest,
     CreateAgentResponse,
@@ -34,6 +36,8 @@ from shared.types import (
     RunResponse,
 )
 
+configure_ssl_cert_file()
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -42,6 +46,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Agent Marketplace API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/users", response_model=CreateUserResponse)
@@ -50,11 +61,21 @@ def create_user(request: CreateUserRequest) -> CreateUserResponse:
     return CreateUserResponse(user=user)
 
 
+@app.get("/users")
+def list_users() -> list[dict]:
+    return [user.model_dump() for user in repository.list_users()]
+
+
+@app.get("/users/{user_id}")
+def get_user(user_id: str) -> dict:
+    try:
+        return repository.get_user(user_id).model_dump()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/agents", response_model=CreateAgentResponse)
 def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
-    import uuid
-    from shared.circle_client import CircleProvisionedWallet
-
     try:
         repository.get_user(request.user_id)
     except KeyError as exc:
@@ -65,9 +86,11 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     if request.role == "seller" and not endpoint_url:
         endpoint_url = f"{settings.seller_base_url}{settings.seller_research_path}"
 
-    # Use real Circle wallets
     if not settings.circle_enabled:
-        raise HTTPException(status_code=400, detail="Circle credentials not configured. Set CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET in .env")
+        raise HTTPException(
+            status_code=400,
+            detail="Circle credentials not configured. Real Circle wallets are required.",
+        )
 
     try:
         wallet_set_id = ensure_circle_wallet_set_id()
@@ -85,6 +108,40 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
 
     agent = repository.create_agent(request.model_copy(update={"endpoint_url": endpoint_url}), wallet)
     return CreateAgentResponse(agent=agent)
+
+
+@app.get("/agents")
+def list_agents(
+    user_id: str | None = None,
+    role: str | None = None,
+) -> list[dict]:
+    return [
+        agent.model_dump()
+        for agent in repository.list_agents(user_id=user_id, role=role)
+    ]
+
+
+@app.get("/agents/{agent_id}")
+def get_agent(agent_id: str) -> dict:
+    try:
+        return repository.get_agent(agent_id).model_dump()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/users/{user_id}/agents")
+def list_user_agents(
+    user_id: str,
+    role: str | None = None,
+) -> list[dict]:
+    try:
+        repository.get_user(user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [
+        agent.model_dump()
+        for agent in repository.list_agents(user_id=user_id, role=role)
+    ]
 
 
 def _poll_payment_status(circle_tx_id: str, max_retries: int = 3, retry_delay: float = 0.5) -> tuple[str | None, str]:
@@ -107,7 +164,13 @@ def _poll_payment_status(circle_tx_id: str, max_retries: int = 3, retry_delay: f
 
 @app.get("/health")
 def health_check() -> dict:
-    return {"status": "ok", "circle_enabled": get_settings().circle_enabled}
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "circle_enabled": settings.circle_enabled,
+        "research_mode": settings.research_mode,
+        "seller_price_usdc": settings.seller_price_usdc,
+    }
 
 
 @app.post("/run", response_model=RunResponse)
@@ -125,6 +188,12 @@ def run_marketplace(request: RunRequest) -> RunResponse:
         raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
 
     try:
+        print(f"\n🚀 Starting orchestrator with:")
+        print(f"   Goal: {request.user_goal}")
+        print(f"   Buyer: {request.buyer_agent_id}")
+        print(f"   Seller: {request.seller_agent_id}")
+        print(f"   Thread: {request.thread_id}\n")
+
         result = orchestrator_graph.invoke(
             {
                 "user_goal": request.user_goal,
@@ -134,15 +203,22 @@ def run_marketplace(request: RunRequest) -> RunResponse:
             },
             config={"configurable": {"thread_id": request.thread_id}},
         )
+        print(f"✅ Orchestrator completed successfully\n")
+
     except (CircleWalletBadRequestException, CircleWalletApiException, CircleConfigApiException) as exc:
         import traceback
-        traceback.print_exc()
+        error_msg = traceback.format_exc()
+        print(f"\n❌ CIRCLE ERROR:\n{error_msg}\n")
         raise HTTPException(status_code=400, detail=f"Marketplace run failed: {exc}") from exc
+
     except Exception as exc:
         import traceback
         error_msg = traceback.format_exc()
-        print(f"\n❌ ERROR in orchestrator:\n{error_msg}\n")
-        raise HTTPException(status_code=500, detail=f"Orchestrator error: {str(exc)}") from exc
+        print(f"\n❌ ORCHESTRATOR ERROR:\n{error_msg}\n")
+        print(f"Exception type: {type(exc).__name__}")
+        print(f"Exception args: {exc.args}")
+        print(f"Full exception: {str(exc)}\n")
+        raise HTTPException(status_code=500, detail=f"Orchestrator error: {type(exc).__name__}: {str(exc)}") from exc
 
     # Poll Circle for payment confirmations if Circle is enabled
     payments = result.get("payments", [])
@@ -172,11 +248,162 @@ def run_marketplace(request: RunRequest) -> RunResponse:
         thread_id=request.thread_id,
         final_answer=result.get("final_answer"),
         running_answer=result.get("running_answer"),
+        query_intent=result.get("query_intent", "research"),
+        is_conversational=result.get("is_conversational", False),
+        task_specs=result.get("task_specs", []),
+        results=result.get("results", []),
+        buyer_workflows=result.get("buyer_workflows", []),
         transaction_hashes=tx_hashes,
         payments=payments,
         failed_tasks=result.get("failed_tasks", []),
         pending_question=result.get("pending_question"),
     )
+
+
+@app.post("/run/stream")
+async def run_marketplace_stream(request: RunRequest):
+    """Stream the marketplace execution as Server-Sent Events (SSE) with real-time progress."""
+    import asyncio
+    import json
+    import time
+    from fastapi.responses import StreamingResponse
+
+    # Validate agents exist
+    try:
+        buyer = repository.get_agent(request.buyer_agent_id)
+        seller = repository.get_agent(request.seller_agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
+
+    if buyer.role != "buyer":
+        raise HTTPException(status_code=400, detail="buyer_agent_id must reference a buyer agent.")
+    if seller.role != "seller":
+        raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+
+    async def event_generator():
+        """Generate SSE events showing real-time agent thinking and progress."""
+        queue: list = []
+
+        def emit_event(event_type: str, data: dict, phase: str = None):
+            """Emit an event to the stream."""
+            event = {
+                "type": event_type,
+                "phase": phase,
+                "data": data,
+                "timestamp_ms": int(time.time() * 1000),
+            }
+            queue.append(event)
+
+        try:
+            # Phase 1: Detecting Intent
+            emit_event("phase_start", {"phase": "intent_detection", "message": "🧠 Analyzing query intent..."}, "plan")
+            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+            print(f"\n🚀 Starting orchestrator stream:")
+            print(f"   Goal: {request.user_goal}")
+            print(f"   Buyer: {buyer.name}")
+            print(f"   Seller: {seller.name}\n")
+
+            # Run the orchestrator
+            start_time = time.time()
+            result = orchestrator_graph.invoke(
+                {
+                    "user_goal": request.user_goal,
+                    "thread_id": request.thread_id,
+                    "buyer_agent_id": request.buyer_agent_id,
+                    "seller_agent_id": request.seller_agent_id,
+                },
+                config={"configurable": {"thread_id": request.thread_id}},
+            )
+            execution_time = int((time.time() - start_time) * 1000)
+
+            # Emit results progressively
+            is_conversational = result.get("is_conversational", False)
+
+            if is_conversational:
+                emit_event("phase_complete", {"phase": "intent_detection", "intent": "conversational"}, "plan")
+                yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                emit_event("answer_ready", {
+                    "message": "💬 Conversational query detected",
+                    "answer": result.get("direct_answer") or result.get("final_answer")
+                }, "answer")
+                yield f"data: {json.dumps(queue.pop(0))}\n\n"
+            else:
+                # Research query - show planning
+                emit_event("phase_complete", {"phase": "intent_detection", "intent": "research"}, "plan")
+                yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                # Show plan
+                task_specs = result.get("task_specs", [])
+                emit_event("planning", {
+                    "message": f"📋 Planning {len(task_specs)} research task(s)",
+                    "tasks": [{"id": t.task_id, "query": t.query} for t in task_specs]
+                }, "plan")
+                yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                # Show buyer workflows
+                buyer_workflows = result.get("buyer_workflows", [])
+                for workflow in buyer_workflows:
+                    emit_event("buyer_executing", {
+                        "task_id": workflow.task_id,
+                        "message": f"🎯 Executing task: {workflow.task_id}",
+                        "steps": workflow.execution_plan[:3]  # Show first 3 steps
+                    }, "execute")
+                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                    # Show reasoning
+                    node_outputs = workflow.node_outputs or []
+                    for node in node_outputs:
+                        if node.reasoning:
+                            emit_event("agent_reasoning", {
+                                "node": node.node_name,
+                                "title": node.title,
+                                "reasoning": node.reasoning,
+                                "duration_ms": node.duration_ms or 0
+                            }, "execute")
+                            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                # Show results
+                results = result.get("results", [])
+                if results:
+                    emit_event("research_complete", {
+                        "message": f"📚 Research complete for {len(results)} task(s)",
+                        "count": len(results)
+                    }, "answer")
+                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+                    for res in results:
+                        emit_event("result", {
+                            "title": res.title if hasattr(res, "title") else res.get("title"),
+                            "summary": (res.summary if hasattr(res, "summary") else res.get("summary", ""))[:150],
+                            "bullets": (res.bullets if hasattr(res, "bullets") else res.get("bullets", []))[:2]
+                        }, "answer")
+                        yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+            # Final answer
+            emit_event("done", {
+                "final_answer": result.get("final_answer") or result.get("running_answer"),
+                "execution_time_ms": execution_time,
+                "payments": len(result.get("payments", [])),
+                "full_result": result
+            })
+            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+            print(f"✅ Stream completed in {execution_time}ms\n")
+
+        except Exception as exc:
+            import traceback
+            error_msg = traceback.format_exc()
+            print(f"\n❌ Stream error: {error_msg}\n")
+
+            emit_event("error", {
+                "error": str(exc),
+                "type": type(exc).__name__
+            })
+            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.post("/resume", response_model=RunResponse)
@@ -189,6 +416,11 @@ def resume_marketplace(request: ResumeRequest) -> RunResponse:
         thread_id=request.thread_id,
         final_answer=result.get("final_answer"),
         running_answer=result.get("running_answer"),
+        query_intent=result.get("query_intent", "research"),
+        is_conversational=result.get("is_conversational", False),
+        task_specs=result.get("task_specs", []),
+        results=result.get("results", []),
+        buyer_workflows=result.get("buyer_workflows", []),
         transaction_hashes=result.get("transaction_hashes", []),
         payments=result.get("payments", []),
         failed_tasks=result.get("failed_tasks", []),

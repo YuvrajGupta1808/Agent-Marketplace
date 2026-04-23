@@ -12,6 +12,7 @@ from shared.config import get_settings
 from shared.circle_client import get_circle_client
 from shared.provisioning import ensure_circle_wallet_set_id
 from shared.repository import repository
+from shared.ssl import configure_ssl_cert_file
 from shared.types import AgentRecord, ResearchRequest
 from shared.x402_client import (
     PAYMENT_REQUIRED_HEADER,
@@ -22,6 +23,8 @@ from shared.x402_client import (
     PaymentReceipt,
     get_x402_client,
 )
+
+configure_ssl_cert_file()
 
 
 @asynccontextmanager
@@ -61,18 +64,10 @@ def research_endpoint(
         raise HTTPException(status_code=402, detail="Buyer agent does not match payment authorization.")
     if not payment_tx_id:
         raise HTTPException(status_code=402, detail="Missing Circle transaction id.")
+    if not get_settings().circle_enabled:
+        raise HTTPException(status_code=400, detail="Circle credentials are required for seller payments.")
 
-    # Get transaction from Circle (or stub if unavailable)
-    try:
-        transaction = get_circle_client().get_transaction(payment_tx_id)
-    except Exception:
-        # Use stub transaction for testing/embedded mode
-        transaction = {
-            "destination_address": seller.wallet.address,
-            "amounts": [offer.amount_usdc],
-            "state": "CONFIRMED",
-            "tx_hash": f"0x{'0' * 64}",
-        }
+    transaction = get_circle_client().get_transaction(payment_tx_id)
 
     destination = (transaction.get("destination_address") or transaction.get("destinationAddress") or "").lower()
     amounts = transaction.get("amounts") or []

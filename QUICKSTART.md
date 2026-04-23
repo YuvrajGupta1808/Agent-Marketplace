@@ -28,7 +28,7 @@ This creates agents, runs the marketplace, and shows payments - all in ~3 second
 ### Terminal 1: Seller Agent Server
 ```bash
 mkdir -p data
-uvicorn seller_agent.server:app --port 8001 --reload
+SSL_CERT_FILE="$(./venv312/bin/python -m certifi)" ./venv312/bin/python -m uvicorn seller_agent.server:app --port 8001 --reload
 ```
 
 You should see:
@@ -38,7 +38,7 @@ INFO:     Uvicorn running on http://127.0.0.1:8001
 
 ### Terminal 2: API Server
 ```bash
-uvicorn api.server:app --port 8000 --reload
+SSL_CERT_FILE="$(./venv312/bin/python -m certifi)" ./venv312/bin/python -m uvicorn api.server:app --port 8000 --reload
 ```
 
 You should see:
@@ -46,10 +46,15 @@ You should see:
 INFO:     Uvicorn running on http://127.0.0.1:8000
 ```
 
-### Terminal 3: Run a Query
+### Terminal 3: Streamlit Demo UI
+```bash
+SSL_CERT_FILE="$(./venv312/bin/python -m certifi)" ./venv312/bin/streamlit run app.py --server.port 8501
+```
+
+### Terminal 4: Run a Query
 ```bash
 # Test single query
-python -c "
+./venv312/bin/python -c "
 import httpx
 client = httpx.Client(timeout=30)
 
@@ -95,6 +100,7 @@ python demo/run_demo.py
 - ✅ CIRCLE_API_KEY: Set
 - ✅ CIRCLE_ENTITY_SECRET: Set
 - ✅ Will automatically create wallets for buyer and seller
+- ✅ `SSL_CERT_FILE` can be sourced from `certifi` for Circle TLS verification
 
 ### LLM Integration
 - ✅ FEATHERLESS_API_KEY: Set
@@ -114,9 +120,9 @@ python demo/run_demo.py
 | Component | Status | Details |
 |-----------|--------|---------|
 | Embedded Mode | ✅ Working | No setup needed |
-| Stub Wallets | ✅ Working | Auto-created per agent |
-| Stub Payments | ✅ Working | Mock transactions |
-| Circle API | ⚠️ Optional | Install if needed: `pip install circle-developer-controlled-wallets` |
+| Circle Wallets | ✅ Required | Real Circle wallets only |
+| Circle Payments | ✅ Required | Real Circle payment flow only |
+| Circle API | ✅ Required | Install if needed: `pip install circle-developer-controlled-wallets` |
 | Database | ✅ Ready | SQLite at `data/marketplace.db` |
 
 ---
@@ -128,8 +134,8 @@ python demo/run_demo.py
 - Kill any existing processes: `lsof -i :8000` and `lsof -i :8001`
 
 **Issue: "Circle wallet provisioning failed"**
-- Embedded mode: Works without Circle, uses stubs
-- Server mode: Ensure CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET are set
+- Ensure `CIRCLE_API_KEY` and `CIRCLE_ENTITY_SECRET` are set
+- Start the process with `SSL_CERT_FILE="$(./venv312/bin/python -m certifi)"` if your macOS trust store is not being picked up
 
 **Issue: Tests hang**
 - Ctrl+C to stop

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>
+      // Catch ResizeObserver errors before Vite's error overlay can intercept them
+      window.addEventListener('error', function(e) {
+        if (e.message && e.message.includes('ResizeObserver')) {
+          e.stopImmediatePropagation();
+        }
+      });
+      // Fallback: Remove the overlay if it manages to open with this error
+      const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+          if (mutation.addedNodes.length) {
+            mutation.addedNodes.forEach(function(node) {
+              if (node.tagName === 'VITE-ERROR-OVERLAY') {
+                if (node.shadowRoot && node.shadowRoot.innerHTML.includes('ResizeObserver')) {
+                  node.remove();
+                }
+              }
+            });
+          }
+        });
+      });
+      observer.observe(document.documentElement, { childList: true });
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentFlow Marketplace</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
