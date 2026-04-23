@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Copy, ExternalLink, PenTool, Wallet as WalletIcon } from "lucide-react";
 import { useAppState } from "../lib/app-state";
+import { getTransactions, type Transaction } from "../lib/api";
 
 const ARC_EXPLORER_BASE_URL = "https://testnet.arcscan.app";
 
@@ -13,6 +14,8 @@ function shorten(value: string, start = 10, end = 8) {
 export function Wallet() {
   const { currentBuyer, latestRun, health } = useAppState();
   const [copied, setCopied] = useState(false);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
 
   const payments = latestRun?.payments ?? [];
   const paymentTotal = useMemo(
@@ -20,6 +23,38 @@ export function Wallet() {
     [payments],
   );
   const latestPayment = payments[0] ?? null;
+
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        setIsLoadingTransactions(true);
+        const response = await getTransactions();
+        setTransactions(response.transactions || []);
+      } catch (err) {
+        console.error("Error fetching transactions:", err);
+        setTransactions([]);
+      } finally {
+        setIsLoadingTransactions(false);
+      }
+    };
+
+    fetchTransactions();
+  }, []);
+
+  // Refresh transactions when latestRun changes
+  useEffect(() => {
+    if (latestRun?.thread_id) {
+      const fetchTransactions = async () => {
+        try {
+          const response = await getTransactions();
+          setTransactions(response.transactions || []);
+        } catch (err) {
+          console.error("Error fetching transactions:", err);
+        }
+      };
+      fetchTransactions();
+    }
+  }, [latestRun?.thread_id]);
 
   const handleCopyAddress = async () => {
     if (!currentBuyer?.wallet.address) return;
@@ -197,7 +232,11 @@ export function Wallet() {
         </div>
 
         <div className="p-8">
-          {payments.length === 0 ? (
+          {isLoadingTransactions ? (
+            <div className="border-2 border-dashed border-black p-6 text-center">
+              <p className="text-xs font-black uppercase tracking-[0.15em] text-black">Loading transactions...</p>
+            </div>
+          ) : transactions.length === 0 ? (
             <div className="border-2 border-dashed border-black p-6 text-center">
               <p className="text-xs font-black uppercase tracking-[0.15em] text-black">No wallet payments yet</p>
               <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-gray-500">
@@ -206,21 +245,21 @@ export function Wallet() {
             </div>
           ) : (
             <div className="space-y-5">
-              {payments.map((payment) => {
-                const explorerUrl = payment.tx_hash ? `${ARC_EXPLORER_BASE_URL}/tx/${payment.tx_hash}` : null;
+              {transactions.map((tx) => {
+                const explorerUrl = tx.tx_hash ? `${ARC_EXPLORER_BASE_URL}/tx/${tx.tx_hash}` : null;
                 return (
-                  <div key={payment.circle_transaction_id} className="grid grid-cols-1 gap-5 border-b border-gray-200 pb-5 last:border-b-0 last:pb-0 md:grid-cols-[1.3fr_0.8fr_0.8fr_auto]">
+                  <div key={tx.id} className="grid grid-cols-1 gap-5 border-b border-gray-200 pb-5 last:border-b-0 last:pb-0 md:grid-cols-[1.3fr_0.8fr_0.8fr_auto]">
                     <div>
-                      <p className="text-xs font-black uppercase tracking-widest text-black">{payment.task_id}</p>
-                      <p className="mt-2 break-all font-mono text-[10px] font-bold text-gray-500">{payment.circle_transaction_id}</p>
+                      <p className="text-xs font-black uppercase tracking-widest text-black">{tx.task_id}</p>
+                      <p className="mt-2 break-all font-mono text-[10px] font-bold text-gray-500">{tx.circle_transaction_id}</p>
                     </div>
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">Amount</p>
-                      <p className="mt-2 text-xs font-black uppercase tracking-widest text-black">{payment.amount_usdc} USDC</p>
+                      <p className="mt-2 text-xs font-black uppercase tracking-widest text-black">{Number(tx.amount_usdc || 0).toFixed(6)} USDC</p>
                     </div>
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">State</p>
-                      <p className="mt-2 text-xs font-black uppercase tracking-widest text-black">{payment.state}</p>
+                      <p className="mt-2 text-xs font-black uppercase tracking-widest text-black">{tx.state}</p>
                     </div>
                     <div className="md:justify-self-end">
                       {explorerUrl ? (
