@@ -1,8 +1,10 @@
-import { Send, ChevronDown, ChevronUp } from "lucide-react";
+import { Send } from "lucide-react";
 import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AgentRecord, RunResponse } from "../../lib/api";
+import { streamMarketplace } from "../../lib/api";
+import type { AgentRecord, RunResponse, StreamEvent } from "../../lib/api";
+import { ThinkingNode } from "./ThinkingNode";
 
 interface ChatInterfaceProps {
   buyer: AgentRecord | null;
@@ -16,7 +18,6 @@ interface ChatInterfaceProps {
 interface Message {
   role: "user" | "agent";
   content: string;
-  thinking?: string;
   id: string;
 }
 
@@ -71,8 +72,8 @@ export function ChatInterface({
   ]);
   const [input, setInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
-
+  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
+  const [finalAnswer, setFinalAnswer] = useState("");
 
   const connectedSellerIds = Array.isArray(buyer?.metadata.connected_seller_ids)
     ? (buyer?.metadata.connected_seller_ids as string[])
@@ -101,33 +102,36 @@ export function ChatInterface({
     setMessages(prev => [...prev, { role: "user", content: goal, id: userMsgId }]);
     setInput("");
     setIsSubmitting(true);
+    setStreamEvents([]);
+    setFinalAnswer("");
 
     try {
-      const result = await onRunWorkflow(goal);
-      const finalAnswer = getDisplayAnswer(result);
-      const msgId = `msg-${Date.now()}`;
-      setMessages((prev) => [
-        ...prev,
-        { role: "agent", content: finalAnswer, id: msgId },
-      ]);
+      const events: StreamEvent[] = [];
+      let answer = "";
+
+      for await (const event of streamMarketplace({
+        userGoal: goal,
+        buyerAgentId: buyer.id,
+        sellerAgentId: selectedSellerId,
+      })) {
+        events.push(event);
+        setStreamEvents([...events]);
+
+        // Capture final answer from stream
+        if (event.type === "final_answer") {
+          answer = event.answer || "";
+          setFinalAnswer(answer);
+        }
+      }
+
+      // Use the actual answer from the backend, or default if empty
+      setFinalAnswer(answer || "Research completed successfully.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Workflow failed.";
-      setMessages((prev) => [...prev, { role: "agent", content: `❌ Error: ${message}`, id: `err-${Date.now()}` }]);
+      setFinalAnswer(`❌ Error: ${message}`);
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const toggleThinking = (msgId: string) => {
-    setExpandedThinking(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(msgId)) {
-        newSet.delete(msgId);
-      } else {
-        newSet.add(msgId);
-      }
-      return newSet;
-    });
   };
 
   return (
@@ -163,21 +167,6 @@ export function ChatInterface({
       <div className="flex-1 overflow-y-auto p-6 space-y-4 flex flex-col justify-end">
         {messages.map((msg) => (
           <div key={msg.id} className={`flex w-full flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
-            {/* Thinking Section (inline, collapsible) */}
-            {msg.thinking && (
-              <div className="mb-2 w-full max-w-[85%] cursor-pointer" onClick={() => toggleThinking(msg.id)}>
-                <div className="flex items-center gap-2 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-gray-600 border-2 border-gray-400 bg-gray-100 hover:bg-gray-200 transition-colors rounded-none">
-                  {expandedThinking.has(msg.id) ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                  💭 Thinking
-                </div>
-                {expandedThinking.has(msg.id) && (
-                  <div className="mt-0 px-4 py-3 text-[9px] text-gray-700 leading-relaxed border-2 border-gray-400 border-t-0 bg-white rounded-none whitespace-pre-wrap max-w-[85%]">
-                    {msg.thinking}
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Main Message */}
             <div className={`p-4 rounded-none text-xs font-semibold max-w-[85%] border-2 leading-relaxed whitespace-pre-wrap wrap-break-word shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${msg.role === "user" ? "bg-black text-white border-black" : "bg-white text-gray-800 border-black"}`}>
               {msg.role === "user" ? (
@@ -225,6 +214,59 @@ export function ChatInterface({
             </span>
           </div>
         ))}
+
+        {/* Show thinking section during or after execution */}
+        {(isSubmitting || streamEvents.length > 0) && (
+          <div className="flex w-full flex-col items-start">
+            <ThinkingNode isLoading={isSubmitting} events={streamEvents} />
+          </div>
+        )}
+
+        {/* Show final answer after thinking section */}
+        {finalAnswer && (
+          <div className="flex w-full flex-col items-start">
+            <div className="p-4 rounded-none text-xs font-semibold max-w-[85%] border-2 leading-relaxed whitespace-pre-wrap wrap-break-word shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white text-gray-800 border-black">
+              <div className="space-y-2 leading-relaxed">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    h1: ({ children }) => <h1 className="text-sm font-black">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-xs font-black">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-xs font-bold">{children}</h3>,
+                    p: ({ children }) => <p className="text-xs font-medium">{children}</p>,
+                    ul: ({ children }) => <ul className="list-disc pl-5 text-xs font-medium space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal pl-5 text-xs font-medium space-y-1">{children}</ol>,
+                    li: ({ children }) => <li>{children}</li>,
+                    code: ({ children }) => (
+                      <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-black">{children}</code>
+                    ),
+                    pre: ({ children }) => (
+                      <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px]">{children}</pre>
+                    ),
+                    blockquote: ({ children }) => (
+                      <blockquote className="border-l-2 border-gray-400 pl-3 italic text-gray-700">{children}</blockquote>
+                    ),
+                    a: ({ href, children }) => (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2"
+                      >
+                        {children}
+                      </a>
+                    ),
+                  }}
+                >
+                  {normalizeChatContent(finalAnswer)}
+                </ReactMarkdown>
+              </div>
+            </div>
+            <span className="mt-2 text-[9px] font-black uppercase tracking-widest text-gray-400">
+              System Node
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Input */}

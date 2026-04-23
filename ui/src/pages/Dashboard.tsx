@@ -25,7 +25,6 @@ export function Dashboard() {
     selectedSellerId,
     sellerAgents,
     setSelectedSellerId,
-    allPayments,
   } = useAppState();
 
   return (
@@ -54,7 +53,7 @@ export function Dashboard() {
 
             <Panel defaultSize={30} minSize={20} className="min-h-0 min-w-0">
               <div className="h-full min-h-0 w-full overflow-hidden bg-white">
-                <TransactionHistory payments={allPayments} latestRun={latestRun} />
+                <TransactionHistory latestRun={latestRun} />
               </div>
             </Panel>
           </PanelGroup>

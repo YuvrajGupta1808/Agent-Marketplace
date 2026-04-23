@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
+import json
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 
 try:
@@ -244,6 +246,17 @@ def run_marketplace(request: RunRequest) -> RunResponse:
             payment_dicts.append(pmt_dict)
         payments = payment_dicts
 
+    # Save transactions to database
+    for payment in payments:
+        for task_spec in result.get("task_specs", []):
+            repository.save_transaction(
+                thread_id=request.thread_id,
+                task_id=task_spec.get("task_id") if isinstance(task_spec, dict) else task_spec.task_id,
+                buyer_agent_id=request.buyer_agent_id,
+                seller_agent_id=request.seller_agent_id,
+                payment=payment if isinstance(payment, dict) else payment.model_dump(),
+            )
+
     return RunResponse(
         thread_id=request.thread_id,
         final_answer=result.get("final_answer"),
@@ -261,14 +274,8 @@ def run_marketplace(request: RunRequest) -> RunResponse:
 
 
 @app.post("/run/stream")
-async def run_marketplace_stream(request: RunRequest):
-    """Stream the marketplace execution as Server-Sent Events (SSE) with real-time progress."""
-    import asyncio
-    import json
-    import time
-    from fastapi.responses import StreamingResponse
-
-    # Validate agents exist
+def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
+    """Stream execution updates in real-time using Server-Sent Events."""
     try:
         buyer = repository.get_agent(request.buyer_agent_id)
         seller = repository.get_agent(request.seller_agent_id)
@@ -280,47 +287,31 @@ async def run_marketplace_stream(request: RunRequest):
     if seller.role != "seller":
         raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
 
-    async def event_generator():
-        """Generate SSE events showing real-time agent thinking and progress."""
-        import json as json_module
-        queue: list = []
-
-        def make_serializable(obj):
-            """Recursively convert Pydantic models and other objects to JSON-serializable types."""
-            if hasattr(obj, 'model_dump'):
-                return make_serializable(obj.model_dump())
-            elif isinstance(obj, dict):
-                return {k: make_serializable(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [make_serializable(item) for item in obj]
-            else:
+    def _make_serializable(obj):
+        """Convert non-serializable objects to JSON-safe format."""
+        if hasattr(obj, 'model_dump'):
+            return obj.model_dump()
+        elif isinstance(obj, dict):
+            return {k: _make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [_make_serializable(item) for item in obj]
+        else:
+            try:
+                json.dumps(obj)
                 return obj
+            except (TypeError, ValueError):
+                return str(obj)
 
-        def emit_event(event_type: str, data: dict, phase: str = None):
-            """Emit an event to the stream."""
-            event = {
-                "type": event_type,
-                "phase": phase,
-                "data": make_serializable(data),
-                "timestamp_ms": int(time.time() * 1000),
-            }
-            queue.append(event)
-
+    def event_generator():
+        final_result = None
         try:
-            # Phase 1: Detecting Intent
-            emit_event("phase_start", {"phase": "intent_detection", "message": "🧠 Analyzing query intent..."}, "plan")
-            yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-            print(f"\n{'='*60}")
-            print(f"🚀 Starting orchestrator stream:")
+            print(f"\n🚀 Starting streaming orchestrator with:")
             print(f"   Goal: {request.user_goal}")
-            print(f"   Buyer: {buyer.name}")
-            print(f"   Seller: {seller.name}")
-            print(f"{'='*60}")
+            print(f"   Buyer: {request.buyer_agent_id}")
+            print(f"   Seller: {request.seller_agent_id}")
+            print(f"   Thread: {request.thread_id}\n")
 
-            # Run the orchestrator
-            start_time = time.time()
-            result = orchestrator_graph.invoke(
+            for chunk in orchestrator_graph.stream(
                 {
                     "user_goal": request.user_goal,
                     "thread_id": request.thread_id,
@@ -328,140 +319,75 @@ async def run_marketplace_stream(request: RunRequest):
                     "seller_agent_id": request.seller_agent_id,
                 },
                 config={"configurable": {"thread_id": request.thread_id}},
-            )
-            execution_time = int((time.time() - start_time) * 1000)
+                stream_mode=["updates", "custom"],
+                version="v2",
+            ):
+                if chunk["type"] == "updates":
+                    for node_name, state in chunk["data"].items():
+                        # Capture final result from synthesize_answer node
+                        if node_name == "synthesize_answer":
+                            final_result = state
 
-            # Emit planning phase
-            task_specs = result.get("task_specs", [])
-            if task_specs:
-                try:
-                    tasks_data = []
-                    for t in task_specs:
-                        if hasattr(t, 'model_dump'):
-                            t_dict = t.model_dump()
-                        elif isinstance(t, dict):
-                            t_dict = t
-                        else:
-                            t_dict = {"task_id": str(t), "query": ""}
-                        tasks_data.append({
-                            "task_id": t_dict.get("task_id", "unknown"),
-                            "query": str(t_dict.get("query", ""))[:80]
-                        })
-                    emit_event("tasks_planned", {
-                        "task_count": len(task_specs),
-                        "message": f"Decomposed into {len(task_specs)} research task(s)",
-                        "tasks": tasks_data
-                    }, "plan")
-                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
-                except Exception as e:
-                    print(f"Error emitting tasks_planned event: {e}")
-
-            # Emit buyer workflows progress
-            buyer_workflows = result.get("buyer_workflows", [])
-            for workflow in buyer_workflows:
-                try:
-                    task_id = workflow.get("task_id") if isinstance(workflow, dict) else getattr(workflow, "task_id", "unknown")
-                    emit_event("buyer_workflow_start", {
-                        "task_id": task_id,
-                        "message": f"Processing: {task_id}"
-                    }, "execute")
-                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-                    # Show each node execution
-                    node_outputs = workflow.get("node_outputs", []) if isinstance(workflow, dict) else getattr(workflow, "node_outputs", []) or []
-                    for node in node_outputs:
+                        event_data = {
+                            "type": "node_update",
+                            "node": node_name,
+                            "data": _make_serializable(state),
+                        }
                         try:
-                            node_name = node.get("node_name") if isinstance(node, dict) else getattr(node, "node_name", "")
-                            node_output = node.get("output", {}) if isinstance(node, dict) else getattr(node, "output", {})
-
-                            # Extract relevant info from node output
-                            if node_name == "execute_payment" and isinstance(node_output, dict):
-                                emit_event("payment_executed", {
-                                    "task_id": task_id,
-                                    "amount_usdc": "0.001",
-                                    "status": "settled"
-                                }, "execute")
-                                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-                            elif node_name == "send_research_request":
-                                emit_event("research_sent", {
-                                    "task_id": task_id,
-                                    "status": "sent"
-                                }, "execute")
-                                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-
-                            elif node_name == "fetch_result" and isinstance(node_output, dict):
-                                result_data = node_output.get("result")
-                                if result_data:
-                                    result_title = result_data.get("title", "Result") if isinstance(result_data, dict) else "Result"
-                                    emit_event("result_fetched", {
-                                        "task_id": task_id,
-                                        "title": str(result_title)[:80],
-                                        "status": "fetched"
-                                    }, "execute")
-                                    yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                            yield f"data: {json.dumps(event_data)}\n\n"
                         except Exception as e:
-                            print(f"Error processing node {node}: {e}")
-                            continue
-                except Exception as e:
-                    print(f"Error processing workflow: {e}")
-                    continue
+                            print(f"  ⚠️ Failed to serialize update: {e}")
 
-            # Emit synthesis
-            try:
-                emit_event("synthesis_started", {
-                    "result_count": len(result.get("results", [])),
-                    "message": "Synthesizing final answer..."
-                }, "answer")
-                yield f"data: {json.dumps(queue.pop(0))}\n\n"
-            except Exception as e:
-                print(f"Error emitting synthesis_started: {e}")
-
-            # Show results
-            results = result.get("results", [])
-            if results:
-                for res in results:
+                elif chunk["type"] == "custom":
+                    event_data = {
+                        "type": "custom_event",
+                        "data": _make_serializable(chunk["data"]),
+                    }
                     try:
-                        res_title = res.get("title", "Result") if isinstance(res, dict) else getattr(res, "title", "Result")
-                        res_summary = (res.get("summary", "") if isinstance(res, dict) else getattr(res, "summary", ""))[:150]
-                        emit_event("result", {
-                            "title": res_title,
-                            "summary": res_summary,
-                            "bullets": (res.get("bullets", []) if isinstance(res, dict) else getattr(res, "bullets", []))[:2]
-                        }, "answer")
-                        yield f"data: {json.dumps(queue.pop(0))}\n\n"
+                        yield f"data: {json.dumps(event_data)}\n\n"
                     except Exception as e:
-                        print(f"Error emitting result event: {e}")
-                        continue
+                        print(f"  ⚠️ Failed to serialize custom event: {e}")
 
-            # Final answer
-            final_answer = result.get("final_answer") or result.get("running_answer")
-            print(f"\n📤 Emitting done event:")
-            print(f"   final_answer: {final_answer[:100] if final_answer else 'EMPTY'}...")
-            print(f"   execution_time: {execution_time}ms")
+            print(f"✅ Orchestrator completed successfully\n")
 
-            emit_event("done", {
-                "final_answer": final_answer,
-                "execution_time_ms": execution_time,
-                "payments": len(result.get("payments", [])),
-                "full_result": result
-            })
-            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+            # Emit final result with the answer
+            if final_result:
+                final_answer = final_result.get("final_answer") or final_result.get("running_answer")
+                if final_answer:
+                    yield f"data: {json.dumps({'type': 'final_answer', 'answer': final_answer})}\n\n"
 
-            print(f"✅ Stream completed in {execution_time}ms\n")
+            yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
+
+        except (CircleWalletBadRequestException, CircleWalletApiException, CircleConfigApiException) as exc:
+            import traceback
+            error_msg = traceback.format_exc()
+            print(f"\n❌ CIRCLE ERROR:\n{error_msg}\n")
+            yield f"data: {json.dumps({'type': 'error', 'error': f'Circle error: {exc}'})}\n\n"
 
         except Exception as exc:
             import traceback
             error_msg = traceback.format_exc()
-            print(f"\n❌ Stream error: {error_msg}\n")
+            print(f"\n❌ ORCHESTRATOR ERROR:\n{error_msg}\n")
+            yield f"data: {json.dumps({'type': 'error', 'error': f'Orchestrator error: {type(exc).__name__}: {str(exc)}'})}\n\n"
 
-            emit_event("error", {
-                "error": str(exc),
-                "type": type(exc).__name__
-            })
-            yield f"data: {json.dumps(queue.pop(0))}\n\n"
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.get("/transactions")
+def get_transactions(thread_id: str | None = None, buyer_agent_id: str | None = None) -> dict:
+    """Fetch transactions, optionally filtered by thread or buyer agent."""
+    transactions = repository.list_transactions(thread_id=thread_id, buyer_agent_id=buyer_agent_id)
+    return {
+        "total": len(transactions),
+        "transactions": transactions,
+    }
 
 
 @app.post("/resume", response_model=RunResponse)

@@ -1,9 +1,9 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalLink } from "lucide-react";
-import type { PaymentRecord, RunResponse } from "../../lib/api";
+import type { RunResponse, Transaction } from "../../lib/api";
+import { getTransactions } from "../../lib/api";
 
 interface TransactionHistoryProps {
-  payments: PaymentRecord[];
   latestRun: RunResponse | null;
 }
 
@@ -40,7 +40,11 @@ function formatPaymentState(state: string): string {
     .join(" ");
 }
 
-export function TransactionHistory({ payments, latestRun }: TransactionHistoryProps) {
+export function TransactionHistory({ latestRun }: TransactionHistoryProps) {
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const taskNames = useMemo(() => {
     const labels = new Map<string, string>();
 
@@ -63,15 +67,33 @@ export function TransactionHistory({ payments, latestRun }: TransactionHistoryPr
     return labels;
   }, [latestRun]);
 
-  const total = payments.reduce((sum, payment) => sum + Number(payment.amount_usdc || 0), 0);
-  const sortedPayments = [...payments].sort((a, b) => {
-    const dateA = new Date(a.created_at || 0).getTime();
-    const dateB = new Date(b.created_at || 0).getTime();
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        const response = await getTransactions();
+        setTransactions(response.transactions);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to fetch transactions");
+        setTransactions([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchTransactions();
+  }, []);
+
+  const total = transactions.reduce((sum, tx) => sum + Number(tx.amount_usdc || 0), 0);
+  const sortedTransactions = [...transactions].sort((a, b) => {
+    const dateA = new Date(a.created_at).getTime();
+    const dateB = new Date(b.created_at).getTime();
     return dateB - dateA;
   });
 
-  const getTaskName = (payment: PaymentRecord): string => {
-    const metadata = payment.metadata;
+  const getTaskName = (tx: Transaction): string => {
+    const metadata = tx.metadata;
     const metadataQuery = typeof metadata?.query === "string" ? metadata.query : null;
     const metadataDescription = typeof metadata?.description === "string" ? metadata.description : null;
 
@@ -82,7 +104,7 @@ export function TransactionHistory({ payments, latestRun }: TransactionHistoryPr
       return normalizeLabel(metadataDescription);
     }
 
-    return taskNames.get(payment.task_id) ?? formatFallbackTaskName(payment.task_id);
+    return taskNames.get(tx.task_id) ?? formatFallbackTaskName(tx.task_id);
   };
 
   return (
@@ -93,7 +115,16 @@ export function TransactionHistory({ payments, latestRun }: TransactionHistoryPr
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-        {sortedPayments.length === 0 ? (
+        {isLoading ? (
+          <div className="border-2 border-dashed border-black p-5 text-center">
+            <p className="text-xs font-black uppercase tracking-[0.15em] text-black">Loading transactions...</p>
+          </div>
+        ) : error ? (
+          <div className="border-2 border-dashed border-red-300 p-5 text-center bg-red-50">
+            <p className="text-xs font-black uppercase tracking-[0.15em] text-red-600">Error loading transactions</p>
+            <p className="mt-2 text-[10px] font-bold text-red-500">{error}</p>
+          </div>
+        ) : sortedTransactions.length === 0 ? (
           <div className="border-2 border-dashed border-black p-5 text-center">
             <p className="text-xs font-black uppercase tracking-[0.15em] text-black">No transactions yet</p>
             <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-gray-500">
@@ -102,7 +133,7 @@ export function TransactionHistory({ payments, latestRun }: TransactionHistoryPr
           </div>
         ) : (
         <div className="space-y-4">
-          {sortedPayments.map((tx) => {
+          {sortedTransactions.map((tx) => {
             const txId = tx.circle_transaction_id || tx.task_id;
             const explorerUrl = tx.tx_hash ? `${TESTNET_EXPLORER}/tx/${tx.tx_hash}` : null;
             const statusLabel = formatPaymentState(tx.state);

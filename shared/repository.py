@@ -232,5 +232,66 @@ class MarketplaceRepository:
         )
         return AgentRecord(**payload, wallet=wallet, metadata=metadata)
 
+    def save_transaction(self, thread_id: str, task_id: str, buyer_agent_id: str, seller_agent_id: str, payment: dict) -> None:
+        """Store a payment transaction in the database."""
+        tx_id = str(uuid.uuid4())
+        created_at = utc_now()
+        metadata_json = json.dumps(payment.get("metadata", {}), sort_keys=True)
+
+        with db_cursor() as connection:
+            connection.execute(
+                """
+                INSERT INTO transactions (
+                    id, thread_id, task_id, buyer_agent_id, seller_agent_id,
+                    circle_transaction_id, amount_usdc, tx_hash, state, created_at, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tx_id,
+                    thread_id,
+                    task_id,
+                    buyer_agent_id,
+                    seller_agent_id,
+                    payment.get("circle_transaction_id", ""),
+                    payment.get("amount_usdc", "0"),
+                    payment.get("tx_hash"),
+                    payment.get("state", "INITIATED"),
+                    created_at,
+                    metadata_json,
+                ),
+            )
+
+    def list_transactions(self, thread_id: str | None = None, buyer_agent_id: str | None = None) -> list[dict]:
+        """Retrieve transactions, optionally filtered by thread or buyer agent."""
+        conditions: list[str] = []
+        params: list[str] = []
+
+        if thread_id:
+            conditions.append("thread_id = ?")
+            params.append(thread_id)
+        if buyer_agent_id:
+            conditions.append("buyer_agent_id = ?")
+            params.append(buyer_agent_id)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        with db_cursor() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM transactions
+                {where_clause}
+                ORDER BY created_at DESC
+                """,
+                tuple(params),
+            ).fetchall()
+
+        return [
+            {
+                **dict(row),
+                "metadata": json.loads(row["metadata_json"]),
+            }
+            for row in rows
+        ]
+
 
 repository = MarketplaceRepository()

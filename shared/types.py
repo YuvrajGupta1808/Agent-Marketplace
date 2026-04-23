@@ -139,15 +139,6 @@ class RunResponse(BaseModel):
     pending_question: str | None = None
 
 
-class StreamEvent(BaseModel):
-    type: Literal["query_intent", "tasks_planned", "direct_answer", "buyer_start", "node_start", "node_done", "payment_initiated", "payment_settled", "research_sent", "result_received", "synthesis_start", "done", "error"]
-    task_id: str | None = None
-    node_name: str | None = None
-    phase: str | None = None
-    data: dict[str, Any] = Field(default_factory=dict)
-    timestamp_ms: int = 0
-
-
 class CreateUserResponse(BaseModel):
     user: UserRecord
 

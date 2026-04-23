@@ -4,6 +4,7 @@ import json
 import re
 
 from openai import OpenAI
+from langgraph.config import get_stream_writer
 
 from orchestrator.prompts import PLANNER_SYSTEM_PROMPT
 from orchestrator.state import OrchestratorState
@@ -83,6 +84,11 @@ def plan_tasks(state: OrchestratorState) -> dict:
     goal = state["user_goal"].strip()
     print(f"\n📋 plan_tasks: Goal = '{goal}'")
 
+    try:
+        writer = get_stream_writer()
+    except (RuntimeError, AttributeError):
+        writer = None
+
     if state.get("clarification_answer"):
         goal = f"{goal}\nClarification: {state['clarification_answer']}"
 
@@ -92,6 +98,12 @@ def plan_tasks(state: OrchestratorState) -> dict:
             "LLM-based planning is required but not configured. "
             "Please set FEATHERLESS_API_KEY environment variable."
         )
+
+    if writer:
+        writer({
+            "event_type": "planning",
+            "message": f"Analyzing goal and planning tasks...",
+        })
 
     client = OpenAI(
         api_key=settings.featherless_api_key.get_secret_value(),
@@ -118,6 +130,16 @@ def plan_tasks(state: OrchestratorState) -> dict:
     print(f"  ✓ Generated {len(task_specs)} task(s)")
     for spec in task_specs:
         print(f"    - {spec.query[:60]}")
+
+    if writer:
+        try:
+            writer({
+                "event_type": "tasks_planned",
+                "task_count": len(task_specs),
+                "tasks": [{"task_id": spec.task_id, "query": spec.query} for spec in task_specs[:5]],
+            })
+        except Exception as e:
+            print(f"  ⚠️ Writer error: {e}")
 
     return {
         "task_specs": task_specs,

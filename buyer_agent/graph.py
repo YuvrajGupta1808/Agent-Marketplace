@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.config import get_stream_writer
 
 from buyer_agent.nodes.discover import discover_seller
 from buyer_agent.nodes.fetch_result import fetch_result
@@ -32,6 +33,14 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
     """Run the buyer graph nodes in graph order while capturing state snapshots and timing."""
     state: BuyerState = dict(initial_state)
     trace: list[GraphNodeOutput] = []
+    task_id = initial_state.get("task_id", "unknown")
+    query = initial_state.get("query", "")[:60]
+
+    try:
+        writer = get_stream_writer()
+    except (RuntimeError, AttributeError):
+        writer = None
+
     node_sequence = [
         ("discover_seller", "Discover Seller", "planning", discover_seller),
         ("plan_research_steps", "ReAct: Reason", "planning", plan_research_steps),
@@ -43,12 +52,55 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
     for node_name, title, phase, node_fn in node_sequence:
         input_state = dict(state)
         start_time = time.time()
+
+        if writer:
+            writer({
+                "event_type": "node_start",
+                "task_id": task_id,
+                "node": node_name,
+                "title": title,
+                "query": query,
+            })
+
         output = node_fn(state)
         duration_ms = int((time.time() - start_time) * 1000)
         state.update(output)
 
         thinking = output.get("thinking", "")
         status = "done" if not output.get("error") else "error"
+
+        event_data = {
+            "event_type": "node_complete",
+            "task_id": task_id,
+            "node": node_name,
+            "title": title,
+            "status": status,
+            "duration_ms": duration_ms,
+        }
+
+        if node_name == "execute_payment" and not output.get("error"):
+            payment_offer = output.get("payment_offer", {})
+            event_data["payment_details"] = {
+                "amount_usdc": payment_offer.get("amount_usdc", "0"),
+                "seller_address": payment_offer.get("pay_to", ""),
+            }
+
+        if node_name == "send_research_request" and not output.get("error"):
+            event_data["research_request_sent"] = {
+                "seller_url": state.get("seller_url", ""),
+                "query": query,
+            }
+
+        if node_name == "fetch_result" and not output.get("error"):
+            result = output.get("result", {})
+            event_data["research_result"] = {
+                "title": result.get("title", ""),
+                "summary": result.get("summary", "")[:200],
+                "bullets_count": len(result.get("bullets", [])),
+            }
+
+        if writer:
+            writer(event_data)
 
         trace.append(
             GraphNodeOutput(
@@ -64,6 +116,13 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
             )
         )
         if output.get("error"):
+            if writer:
+                writer({
+                    "event_type": "error",
+                    "task_id": task_id,
+                    "node": node_name,
+                    "error": output.get("error"),
+                })
             break
 
     return state, trace

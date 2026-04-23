@@ -4,7 +4,6 @@ import {
   HealthResponse,
   PaymentRecord,
   RunResponse,
-  StreamEvent,
   UserRecord,
   createAgent,
   createUser,
@@ -23,7 +22,6 @@ interface AppStateValue {
   latestRun: RunResponse | null;
   health: HealthResponse | null;
   isReady: boolean;
-  streamEvents: StreamEvent[];
   isStreaming: boolean;
   allPayments: PaymentRecord[];
   loginAsUser: (user: UserRecord) => Promise<void>;
@@ -39,7 +37,6 @@ interface AppStateValue {
   setSelectedSellerId: React.Dispatch<React.SetStateAction<string | null>>;
   setLatestRun: React.Dispatch<React.SetStateAction<RunResponse | null>>;
   runBuyerWorkflow: (userGoal: string) => Promise<RunResponse>;
-  clearStreamEvents: () => void;
 }
 
 const STORAGE_KEYS = {
@@ -51,15 +48,21 @@ const STORAGE_KEYS = {
 
 const AppStateContext = createContext<AppStateValue | null>(null);
 
+function getPaymentIdentity(payment: PaymentRecord): string {
+  if (payment.circle_transaction_id) return `circle:${payment.circle_transaction_id}`;
+  if (payment.tx_hash) return `hash:${payment.tx_hash}`;
+  return `task:${payment.task_id}:${payment.created_at ?? ""}:${payment.amount_usdc ?? ""}`;
+}
+
 function mergePayments(existing: PaymentRecord[], incoming: PaymentRecord[]): PaymentRecord[] {
   const merged = new Map<string, PaymentRecord>();
 
   for (const payment of existing) {
-    merged.set(payment.circle_transaction_id || payment.task_id, payment);
+    merged.set(getPaymentIdentity(payment), payment);
   }
 
   for (const payment of incoming) {
-    merged.set(payment.circle_transaction_id || payment.task_id, payment);
+    merged.set(getPaymentIdentity(payment), payment);
   }
 
   return Array.from(merged.values());
@@ -73,7 +76,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [latestRun, setLatestRun] = useState<RunResponse | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [isReady, setIsReady] = useState(false);
-  const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [allPayments, setAllPayments] = useState<PaymentRecord[]>([]);
 
@@ -243,15 +245,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         sellerAgentId: selectedSellerId,
       });
       setLatestRun(result);
+      // Keep full session ledger history while deduplicating repeated events.
       setAllPayments((currentPayments) => mergePayments(currentPayments, result.payments ?? []));
       return result;
     } finally {
       setIsStreaming(false);
     }
-  };
-
-  const clearStreamEvents = () => {
-    setStreamEvents([]);
   };
 
   const value = useMemo<AppStateValue>(
@@ -263,7 +262,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       latestRun,
       health,
       isReady,
-      streamEvents,
       isStreaming,
       allPayments,
       loginAsUser,
@@ -274,9 +272,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       setSelectedSellerId,
       setLatestRun,
       runBuyerWorkflow,
-      clearStreamEvents,
     }),
-    [currentUser, currentBuyer, sellerAgents, selectedSellerId, latestRun, health, isReady, streamEvents, isStreaming, allPayments],
+    [currentUser, currentBuyer, sellerAgents, selectedSellerId, latestRun, health, isReady, isStreaming, allPayments],
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

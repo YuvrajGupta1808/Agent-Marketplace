@@ -44,6 +44,10 @@ export interface PaymentRecord {
 export interface GraphNodeOutput {
   node_name: string;
   title: string;
+  phase?: string;
+  status?: string;
+  duration_ms?: number | null;
+  reasoning?: string;
   input_state: Record<string, unknown>;
   output: Record<string, unknown>;
   state_after: Record<string, unknown>;
@@ -83,15 +87,6 @@ export interface RunResponse {
   payments: PaymentRecord[];
   failed_tasks: string[];
   pending_question?: string | null;
-}
-
-export interface StreamEvent {
-  type: string;
-  phase?: string;
-  task_id?: string;
-  node_name?: string;
-  data: Record<string, unknown>;
-  timestamp_ms: number;
 }
 
 export interface HealthResponse {
@@ -197,24 +192,30 @@ export function runMarketplace(payload: {
   });
 }
 
-export async function runMarketplaceStream(
-  payload: {
-    userGoal: string;
-    buyerAgentId: string;
-    sellerAgentId: string;
-    threadId?: string;
-  },
-  onEvent: (event: StreamEvent) => void,
-): Promise<RunResponse> {
-  const threadId = payload.threadId ?? `ui-${crypto.randomUUID()}`;
+export interface StreamEvent {
+  type: "node_update" | "custom_event" | "stream_complete" | "error" | "final_answer";
+  node?: string;
+  data?: Record<string, unknown>;
+  error?: string;
+  answer?: string;
+}
+
+export async function* streamMarketplace(payload: {
+  userGoal: string;
+  buyerAgentId: string;
+  sellerAgentId: string;
+  threadId?: string;
+}): AsyncGenerator<StreamEvent, void, unknown> {
   const response = await fetch(`${API_BASE_URL}/run/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({
       user_goal: payload.userGoal,
       buyer_agent_id: payload.buyerAgentId,
       seller_agent_id: payload.sellerAgentId,
-      thread_id: threadId,
+      thread_id: payload.threadId ?? `ui-${crypto.randomUUID()}`,
     }),
   });
 
@@ -229,110 +230,61 @@ export async function runMarketplaceStream(
     throw new Error(message || `HTTP ${response.status}`);
   }
 
-  let finalResult: RunResponse | null = null;
   const reader = response.body?.getReader();
-  const decoder = new TextDecoder();
+  if (!reader) throw new Error("No response body");
 
-  if (!reader) {
-    throw new Error("Response body not readable");
-  }
+  const decoder = new TextDecoder();
+  let buffer = "";
 
   try {
-    let eventCount = 0;
-    let buffer = "";
-
-    const processEventPayload = (rawPayload: string) => {
-      const data = rawPayload.trim();
-      if (!data) return;
-
-      // SSE keepalive messages can be sent as "[DONE]".
-      if (data === "[DONE]") return;
-
-      try {
-        const event: StreamEvent = JSON.parse(data);
-        eventCount++;
-        console.log(`[runMarketplaceStream] Event ${eventCount}: type=${event.type}`);
-        onEvent(event);
-
-        if (event.type === "done") {
-          console.log("[runMarketplaceStream] Done event received, extracting full_result");
-          finalResult = (event.data.full_result as RunResponse | undefined) ?? finalResult;
-          if (finalResult && !finalResult.thread_id) {
-            finalResult.thread_id = threadId;
-          }
-          return;
-        }
-
-        // Fallback: some servers emit final payloads under alternate event names.
-        if (!finalResult && (event.type === "result" || event.type === "final")) {
-          const maybeResult = (event.data.full_result ?? event.data) as Partial<RunResponse>;
-          if (maybeResult && typeof maybeResult === "object" && "results" in maybeResult) {
-            finalResult = {
-              thread_id: (maybeResult.thread_id as string) ?? threadId,
-              final_answer: (maybeResult.final_answer as string | null | undefined) ?? null,
-              running_answer: (maybeResult.running_answer as string | null | undefined) ?? null,
-              query_intent: maybeResult.query_intent as string | undefined,
-              is_conversational: maybeResult.is_conversational as boolean | undefined,
-              task_specs: (maybeResult.task_specs as RunResponse["task_specs"]) ?? [],
-              results: (maybeResult.results as RunResponse["results"]) ?? [],
-              buyer_workflows: (maybeResult.buyer_workflows as RunResponse["buyer_workflows"]) ?? [],
-              transaction_hashes: (maybeResult.transaction_hashes as string[]) ?? [],
-              payments: (maybeResult.payments as RunResponse["payments"]) ?? [],
-              failed_tasks: (maybeResult.failed_tasks as string[]) ?? [],
-              pending_question: (maybeResult.pending_question as string | null | undefined) ?? null,
-            };
-          }
-        }
-      } catch (err) {
-        console.error("Failed to parse SSE event:", data, err);
-      }
-    };
-
     while (true) {
       const { done, value } = await reader.read();
-      if (done) {
-        console.log(`[runMarketplaceStream] SSE stream ended. Total events received: ${eventCount}`);
-        break;
-      }
+      if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split("\n\n");
-      buffer = events.pop() ?? "";
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-      for (const block of events) {
-        const dataLines = block
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.replace(/^data:\s?/, ""));
-
-        if (dataLines.length === 0) continue;
-        processEventPayload(dataLines.join("\n"));
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const eventData = JSON.parse(line.slice(6));
+            yield eventData as StreamEvent;
+          } catch {
+            // Skip invalid JSON
+          }
+        }
       }
     }
-
-    if (buffer.trim()) {
-      const dataLines = buffer
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.replace(/^data:\s?/, ""));
-      if (dataLines.length > 0) {
-        processEventPayload(dataLines.join("\n"));
-      }
-    }
-
   } finally {
     reader.releaseLock();
   }
-
-  if (!finalResult) {
-    throw new Error("Stream ended without a complete result. Please retry.");
-  }
-
-  return finalResult;
 }
 
 export function getHealth() {
   return apiRequest<HealthResponse>("/health");
+}
+
+export interface Transaction {
+  id: string;
+  thread_id: string;
+  task_id: string;
+  buyer_agent_id: string;
+  seller_agent_id: string;
+  circle_transaction_id: string;
+  amount_usdc: string;
+  tx_hash: string | null;
+  state: string;
+  created_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export function getTransactions(params?: { threadId?: string; buyerAgentId?: string }) {
+  const search = new URLSearchParams();
+  if (params?.threadId) search.set("thread_id", params.threadId);
+  if (params?.buyerAgentId) search.set("buyer_agent_id", params.buyerAgentId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return apiRequest<{ total: number; transactions: Transaction[] }>(`/transactions${suffix}`);
 }
 
 export { API_BASE_URL };

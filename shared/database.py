@@ -57,6 +57,20 @@ def initialize_database() -> None:
                 created_at TEXT NOT NULL,
                 metadata_json TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS transactions (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                buyer_agent_id TEXT NOT NULL,
+                seller_agent_id TEXT NOT NULL,
+                circle_transaction_id TEXT NOT NULL UNIQUE,
+                amount_usdc TEXT NOT NULL,
+                tx_hash TEXT,
+                state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                metadata_json TEXT NOT NULL
+            );
             """
         )
         connection.commit()
