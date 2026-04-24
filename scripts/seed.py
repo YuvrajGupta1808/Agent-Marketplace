@@ -31,6 +31,14 @@ def seed_database() -> None:
 
     print("🌱 Seeding database...")
 
+    # Check if Circle is enabled
+    if not settings.circle_enabled:
+        print("⚠️  Circle credentials not configured. Skipping agent seeding.")
+        print("   → Set CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET to enable wallet creation")
+        print("   → Agents can be created manually via the UI")
+        repo.set_app_config("seeded_v1", "stub")
+        return
+
     try:
         # Create demo seller user
         seller_user_req = CreateUserRequest(display_name="Demo Seller", external_id="demo-seller")
