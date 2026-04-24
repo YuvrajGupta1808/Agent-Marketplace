@@ -101,10 +101,10 @@ const API_BASE_URL = (() => {
   const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "");
   if (envUrl) return envUrl;
 
-  // For production: use the same domain as the frontend, port 8000
-  // For local dev: default to localhost:8000
+  // For production: use the same domain as the frontend (API is on same server)
+  // For local dev: use localhost:8000 (separate API server)
   if (typeof window !== "undefined" && window.location.hostname !== "localhost") {
-    return `${window.location.protocol}//${window.location.hostname}:8000`;
+    return `${window.location.protocol}//${window.location.hostname}`;
   }
 
   return "http://127.0.0.1:8000";
