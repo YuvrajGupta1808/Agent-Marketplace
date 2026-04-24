@@ -4,7 +4,7 @@ services:
     runtime: python
     pythonVersion: 3.12
     plan: free
-    buildCommand: pip install -e . && cd ui && npm ci && npm run build
+    buildCommand: pip install -e .[arc] && cd ui && npm ci && npm run build
     startCommand: python scripts/start.py
     envVars:
       - key: DATABASE_PATH
