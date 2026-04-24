@@ -53,8 +53,9 @@ def seed_database() -> None:
             ref_id=f"seller:{seller_user.id}",
             name="Demo Seller Agent",
         )
-        print(f"  Created seller wallet: {wallet_info.get('address')}")
-        print(f"  ⚠️  Fund this wallet from Arc Testnet faucet: {wallet_info.get('address')}")
+        wallet_address = wallet_info.address if hasattr(wallet_info, 'address') else wallet_info.get('address')
+        print(f"  Created seller wallet: {wallet_address}")
+        print(f"  ⚠️  Fund this wallet from Arc Testnet faucet: {wallet_address}")
 
         # Create seller agent
         seller_agent_req = CreateAgentRequest(
@@ -76,7 +77,8 @@ def seed_database() -> None:
             ref_id=f"buyer:{buyer_user.id}",
             name="Demo Buyer Agent",
         )
-        print(f"  Created buyer wallet: {wallet_info_buyer.get('address')}")
+        buyer_wallet_address = wallet_info_buyer.address if hasattr(wallet_info_buyer, 'address') else wallet_info_buyer.get('address')
+        print(f"  Created buyer wallet: {buyer_wallet_address}")
 
         # Create buyer agent
         buyer_agent_req = CreateAgentRequest(
