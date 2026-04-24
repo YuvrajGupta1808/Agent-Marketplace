@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: agent-marketplace
+    runtime: python
+    pythonVersion: 3.12
+    plan: free
+    buildCommand: pip install -e . && cd ui && npm ci && npm run build
+    startCommand: python scripts/start.py
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/marketplace.db
+      - key: SELLER_PORT
+        value: 8001
+      - key: PLANNER_MODE
+        value: heuristic
+      - key: RESEARCH_MODE
+        value: stub
+      - key: SELLER_PRICE_USDC
+        value: 0.001
+      - key: REQUEST_TIMEOUT_SECONDS
+        value: 60
+      - key: APP_ENV
+        value: production
+    healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /var/data
+      sizeGB: 1
