@@ -3,10 +3,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 import json
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from langgraph.types import Command
 
 try:
@@ -482,3 +484,8 @@ def poll_pending_transactions() -> dict:
         "total_pending": len(pending),
         "message": f"Updated {updated_count} of {len(pending)} pending transactions"
     }
+
+
+# Serve Vite frontend as static files (SPA)
+if os.path.exists("ui/dist"):
+    app.mount("/", StaticFiles(directory="ui/dist", html=True), name="frontend")

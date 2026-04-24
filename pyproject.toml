@@ -13,7 +13,6 @@ dependencies = [
   "pydantic-settings>=2.13",
   "python-dotenv>=1.0",
   "rich>=13.9",
-  "streamlit>=1.44",
   "tenacity>=8.5",
   "uvicorn>=0.30",
 ]
@@ -36,10 +35,10 @@ packages = [
   "buyer_agent",
   "buyer_agent.nodes",
   "contracts",
-  "demo",
   "orchestrator",
   "orchestrator.nodes",
   "seller_agent",
   "seller_agent.nodes",
   "shared",
+  "scripts",
 ]
