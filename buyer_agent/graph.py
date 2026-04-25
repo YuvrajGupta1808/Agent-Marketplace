@@ -161,14 +161,10 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
 
     if not state.get("within_scope", True):
         # Out of scope - ask for clarification instead of auto-rejecting
-        scope_reason = state.get("scope_rejection_reason", "")
-        clarification_q = (
-            f"I'm not sure I understood correctly. Your request about '{state.get('query', '')[:50]}...' "
-            f"seems to be outside my marketplace scope. {scope_reason}\n\n"
-            f"Could you clarify what you'd like me to help you find through the Agent Marketplace?"
-        )
+        query = state.get('query', '')[:30]
+        clarification_q = f"Your request about '{query}' seems to be outside my marketplace scope... Could you clarify what you'd like me to help you find through the Agent Marketplace?"
         state["pending_question"] = clarification_q
-        state["final_answer"] = None  # Don't auto-return answer, ask user instead
+        state["final_answer"] = None
         return state, trace
 
     # Step 2: Decompose goal into tasks
