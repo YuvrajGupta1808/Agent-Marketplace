@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo } from "react";
-import { useAppState } from "../lib/app-state";
-import type { BuiltInTool } from "../lib/api";
-import { listSellerTools, testResearch, TestResearchResult } from "../lib/api";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { BuiltInTool } from "../lib/api";
+import { listSellerTools, testResearch } from "../lib/api";
+import { useAppState } from "../lib/app-state";
 import { formatToolNames, getSellerPrice, getSellerStatus, getSellerToolIds } from "../lib/seller";
 
 function normalizeMarkdown(text: string) {
@@ -27,7 +27,7 @@ export function SellerTest() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
-  const [result, setResult] = useState<TestResearchResult | null>(null);
+  const [result, setResult] = useState<unknown | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toolOptions, setToolOptions] = useState<BuiltInTool[]>([]);
@@ -38,6 +38,29 @@ export function SellerTest() {
   );
   const selectedSeller = ownedSellerAgents.find((agent) => agent.id === selectedAgentId) ?? null;
   const selectedSellerStatus = selectedSeller ? getSellerStatus(selectedSeller) : "draft";
+  const resultRecord = useMemo(
+    () => (result && typeof result === "object" ? (result as Record<string, unknown>) : null),
+    [result],
+  );
+  const outputPreview = useMemo(() => {
+    if (!resultRecord) return "";
+    if (typeof resultRecord.output === "string") return resultRecord.output;
+    const nestedResult = resultRecord.result;
+    if (nestedResult && typeof nestedResult === "object") {
+      const nestedRecord = nestedResult as Record<string, unknown>;
+      if (typeof nestedRecord.summary === "string") return nestedRecord.summary;
+      if (typeof nestedRecord.output === "string") return nestedRecord.output;
+    }
+    return "";
+  }, [resultRecord]);
+  const rawResultJson = useMemo(() => {
+    if (result == null) return "";
+    try {
+      return JSON.stringify(result, null, 2);
+    } catch {
+      return String(result);
+    }
+  }, [result]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,23 +114,7 @@ export function SellerTest() {
         seller_agent_id: selectedAgentId,
         user_id: currentUser.id,
       });
-
-      const resultPayload = res.result as Partial<TestResearchResult> | undefined;
-      const output = resultPayload?.summary || res.output || JSON.stringify(res);
-
-      if (!output) {
-        throw new Error("No output returned from research");
-      }
-
-      const normalizedResult: TestResearchResult = {
-        task_id: resultPayload?.task_id || res.task_id || "test-task",
-        title: resultPayload?.title || `Research: ${query.trim().slice(0, 50)}`,
-        summary: output,
-        bullets: resultPayload?.bullets || [],
-        citations: resultPayload?.citations || [],
-      };
-
-      setResult(normalizedResult);
+      setResult(res);
     } catch (err) {
       console.error("Research error:", err);
       setError(err instanceof Error ? err.message : "Research failed");
@@ -215,10 +222,10 @@ export function SellerTest() {
                   {isLoading ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
-                      RESEARCHING...
+                      RUNNING...
                     </>
                   ) : (
-                    "RUN RESEARCH"
+                    "RUN TASK"
                   )}
                 </button>
                 {result && selectedSellerStatus === "draft" ? (
@@ -250,42 +257,50 @@ export function SellerTest() {
             </div>
           ) : result ? (
             <div className="border-2 border-black bg-white p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-xl font-bold uppercase tracking-tight text-black mb-6">{result.title}</h2>
-              <div className="prose prose-sm max-w-none text-gray-700">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ children }) => <h1 className="text-base font-black text-black">{children}</h1>,
-                    h2: ({ children }) => <h2 className="text-sm font-black text-black">{children}</h2>,
-                    h3: ({ children }) => <h3 className="text-sm font-bold text-black">{children}</h3>,
-                    p: ({ children }) => <p className="text-xs font-medium leading-relaxed">{children}</p>,
-                    ul: ({ children }) => <ul className="list-disc pl-5 text-xs font-medium space-y-1">{children}</ul>,
-                    ol: ({ children }) => (
-                      <ol className="list-decimal pl-5 text-xs font-medium space-y-1">{children}</ol>
-                    ),
-                    li: ({ children }) => <li>{children}</li>,
-                    strong: ({ children }) => <strong className="font-black text-black">{children}</strong>,
-                    code: ({ children }) => (
-                      <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-black">{children}</code>
-                    ),
-                    pre: ({ children }) => (
-                      <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px]">
-                        {children}
-                      </pre>
-                    ),
-                    blockquote: ({ children }) => (
-                      <blockquote className="border-l-2 border-gray-400 pl-3 italic text-gray-700">{children}</blockquote>
-                    ),
-                  }}
-                >
-                  {normalizeMarkdown(result.summary)}
-                </ReactMarkdown>
+              <h2 className="text-xl font-bold uppercase tracking-tight text-black mb-6">Task Output</h2>
+              {outputPreview ? (
+                <div className="prose prose-sm max-w-none text-gray-700">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      h1: ({ children }) => <h1 className="text-base font-black text-black">{children}</h1>,
+                      h2: ({ children }) => <h2 className="text-sm font-black text-black">{children}</h2>,
+                      h3: ({ children }) => <h3 className="text-sm font-bold text-black">{children}</h3>,
+                      p: ({ children }) => <p className="text-xs font-medium leading-relaxed">{children}</p>,
+                      ul: ({ children }) => <ul className="list-disc pl-5 text-xs font-medium space-y-1">{children}</ul>,
+                      ol: ({ children }) => (
+                        <ol className="list-decimal pl-5 text-xs font-medium space-y-1">{children}</ol>
+                      ),
+                      li: ({ children }) => <li>{children}</li>,
+                      strong: ({ children }) => <strong className="font-black text-black">{children}</strong>,
+                      code: ({ children }) => (
+                        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-black">{children}</code>
+                      ),
+                      pre: ({ children }) => (
+                        <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px]">
+                          {children}
+                        </pre>
+                      ),
+                      blockquote: ({ children }) => (
+                        <blockquote className="border-l-2 border-gray-400 pl-3 italic text-gray-700">{children}</blockquote>
+                      ),
+                    }}
+                  >
+                    {normalizeMarkdown(outputPreview)}
+                  </ReactMarkdown>
+                </div>
+              ) : null}
+              <div className={outputPreview ? "mt-6" : ""}>
+                <p className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Raw Response</p>
+                <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px] text-black">
+                  {rawResultJson}
+                </pre>
               </div>
             </div>
           ) : (
             <div className="border-2 border-dashed border-gray-300 bg-gray-50 p-8 flex items-center justify-center min-h-[200px]">
               <p className="text-xs font-bold uppercase tracking-widest text-gray-400 text-center">
-                Run a research query to see results here
+                Run a task to see output here
               </p>
             </div>
           )}
