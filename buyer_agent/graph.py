@@ -34,16 +34,14 @@ def _snapshot(value: Any) -> Any:
 def _build_rejection_result(state: BuyerState) -> dict:
     """Build a rejection result when goal is out of scope."""
     agent_name = state.get("buyer_agent_name", "Agent")
-    rejection_reason = state.get("scope_rejection_reason", "This goal is outside my capabilities.")
+    query = state.get("query", "")[:30]
+    summary = f"Your request about '{query}' seems to be outside my marketplace scope... Could you clarify what you'd like me to help you find through the Agent Marketplace?"
 
     result = ResearchResult(
         task_id=state.get("task_id", "scope-rejection"),
-        title=f"{agent_name} — Out of Scope",
-        summary=rejection_reason,
-        bullets=[
-            "Please try a different buyer agent.",
-            "Or add a seller agent that handles this capability.",
-        ],
+        title=f"{agent_name} — Please Clarify",
+        summary=summary,
+        bullets=[],
         seller_name=agent_name,
         is_ambiguous=False,
     )
