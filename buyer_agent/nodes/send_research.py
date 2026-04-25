@@ -36,7 +36,7 @@ def send_research_request(state: BuyerState) -> dict:
             )
 
         if paid.status_code >= 400:
-            error_msg = f"Research request failed with {paid.status_code}: {paid.text[:100]}"
+            error_msg = f"Research request failed with {paid.status_code}: {paid.text}"
             print(f"    ❌ {error_msg}")
             return {"error": error_msg}
 
@@ -52,6 +52,6 @@ def send_research_request(state: BuyerState) -> dict:
             "response_body": paid.json(),
         }
     except Exception as e:
-        error_msg = f"send_research_request error: {type(e).__name__}: {str(e)[:100]}"
+        error_msg = f"send_research_request error: {type(e).__name__}: {e}"
         print(f"    ❌ {error_msg}")
         return {"error": error_msg}

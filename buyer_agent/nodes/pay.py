@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+
 import httpx
 from langgraph.config import get_stream_writer
 
 from buyer_agent.state import BuyerState
 from shared.config import get_settings
+from shared.llm_providers import coerce_payment_limit, resolve_buyer_llm_config
 from shared.repository import repository
 from shared.x402_client import (
     PAYMENT_REQUIRED_HEADER,
     PaymentOffer,
     get_x402_client,
 )
+
+
+def _decimal_amount(value: str) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Invalid USDC amount: {value}") from exc
 
 
 def execute_payment(state: BuyerState) -> dict:
@@ -33,12 +43,26 @@ def execute_payment(state: BuyerState) -> dict:
                 },
             )
             if initial.status_code != 402:
-                error_msg = f"Expected 402 from seller, received {initial.status_code}: {initial.text[:100]}"
+                error_msg = f"Expected 402 from seller, received {initial.status_code}: {initial.text}"
                 print(f"    ❌ {error_msg}")
                 return {"error": error_msg}
 
             print(f"    ✓ Payment request received (402)")
             offer = PaymentOffer.model_validate_json(initial.headers[PAYMENT_REQUIRED_HEADER])
+            llm_config = resolve_buyer_llm_config(state.get("buyer_agent_llm_config"))
+            payment_config = state.get("buyer_agent_payment_config") or {}
+            max_payment_usdc = coerce_payment_limit(
+                payment_config.get("max_payment_usdc"),
+                llm_config["payment_floor_usdc"],
+            )
+            if _decimal_amount(offer.amount_usdc) > _decimal_amount(max_payment_usdc):
+                error_msg = (
+                    f"Seller payment offer {offer.amount_usdc} USDC exceeds buyer limit "
+                    f"{max_payment_usdc} USDC."
+                )
+                print(f"    ❌ {error_msg}")
+                return {"error": error_msg}
+
             authorization = get_x402_client().sign_payment(
                 buyer_agent_id=state["buyer_agent_id"],
                 buyer_wallet_id=state["buyer_wallet_id"],
@@ -59,6 +83,10 @@ def execute_payment(state: BuyerState) -> dict:
             receipt_dict["metadata"] = {
                 "query": state.get("query", ""),
                 "task_id": state.get("task_id", ""),
+                "buyer_llm_provider": llm_config["provider"],
+                "buyer_llm_model": llm_config["model"],
+                "buyer_llm_tier": llm_config["tier"],
+                "buyer_payment_limit_usdc": max_payment_usdc,
             }
             print(f"    ✓ Payment settled: {offer.amount_usdc} USDC")
 
@@ -102,8 +130,8 @@ def execute_payment(state: BuyerState) -> dict:
                 "payment_offer": offer.model_dump(),
                 "payment_receipt": receipt_dict,
             }
-    except (ImportError, Exception) as e:
-        error_msg = f"Payment processing failed: {type(e).__name__}: {str(e)[:80]}"
+    except Exception as e:
+        error_msg = f"Payment processing failed: {type(e).__name__}: {e}"
         print(f"    ⚠️ {error_msg}")
         return {
             "error": error_msg,

@@ -80,6 +80,7 @@ export interface RunResponse {
   thread_id: string;
   final_answer?: string | null;
   running_answer?: string | null;
+  error?: string | null;
   query_intent?: string;
   is_conversational?: boolean;
   task_specs: Array<{ task_id: string; query: string; objective: string }>;
@@ -96,6 +97,34 @@ export interface HealthResponse {
   circle_enabled: boolean;
   research_mode: string;
   seller_price_usdc: number;
+}
+
+export interface BuiltInTool {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  requires_platform_key: boolean;
+}
+
+export interface LlmModelOption {
+  id: string;
+  name: string;
+  tier: "small" | "medium" | "large" | string;
+  payment_floor_usdc: string;
+  description: string;
+}
+
+export interface LlmProviderOption {
+  id: "aimlapi" | "featherless" | "gemini" | string;
+  name: string;
+  base_url: string;
+  api_key_env: string;
+  docs_url: string;
+  model_source_url: string;
+  enabled: boolean;
+  disabled_reason?: string | null;
+  models: LlmModelOption[];
 }
 
 const API_BASE_URL = (() => {
@@ -187,6 +216,46 @@ export function createAgent(payload: {
       system_prompt: payload.system_prompt ?? "",
       endpoint_url: payload.endpointUrl,
       metadata: payload.metadata ?? {},
+    }),
+  });
+}
+
+export function listSellerTools() {
+  return apiRequest<BuiltInTool[]>("/seller-tools");
+}
+
+export function listLlmProviders() {
+  return apiRequest<LlmProviderOption[]>("/llm-providers");
+}
+
+export function updateSellerStatus(payload: {
+  agentId: string;
+  userId: string;
+  status: "draft" | "published" | "disabled";
+}) {
+  return apiRequest<{ agent: AgentRecord }>(`/agents/${payload.agentId}/seller-status`, {
+    method: "POST",
+    body: JSON.stringify({
+      user_id: payload.userId,
+      status: payload.status,
+    }),
+  });
+}
+
+export function updateSellerConfig(payload: {
+  agentId: string;
+  userId: string;
+  category?: string;
+  priceUsdc?: string;
+  builtInTools?: string[];
+}) {
+  return apiRequest<{ agent: AgentRecord }>(`/agents/${payload.agentId}/seller-config`, {
+    method: "POST",
+    body: JSON.stringify({
+      user_id: payload.userId,
+      category: payload.category,
+      price_usdc: payload.priceUsdc,
+      built_in_tools: payload.builtInTools,
     }),
   });
 }

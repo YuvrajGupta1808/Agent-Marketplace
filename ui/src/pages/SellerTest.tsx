@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
-import { useAppState } from "../lib/app-state";
-import { testResearch, TestResearchResult } from "../lib/api";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { BuiltInTool } from "../lib/api";
+import { listSellerTools, testResearch } from "../lib/api";
+import { useAppState } from "../lib/app-state";
+import { formatToolNames, getSellerPrice, getSellerStatus, getSellerToolIds } from "../lib/seller";
 
 function normalizeMarkdown(text: string) {
   if (!text) return "";
@@ -20,26 +22,76 @@ function normalizeMarkdown(text: string) {
 }
 
 export function SellerTest() {
-  const { currentUser, sellerAgents, isReady } = useAppState();
+  const { currentUser, sellerAgents, isReady, selectedSellerId, setSelectedSellerId, setSellerStatus } = useAppState();
   const [query, setQuery] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState<TestResearchResult | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [result, setResult] = useState<unknown | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [toolOptions, setToolOptions] = useState<BuiltInTool[]>([]);
+
+  const ownedSellerAgents = useMemo(
+    () => (currentUser ? sellerAgents.filter((agent) => agent.user_id === currentUser.id) : []),
+    [currentUser, sellerAgents],
+  );
+  const selectedSeller = ownedSellerAgents.find((agent) => agent.id === selectedAgentId) ?? null;
+  const selectedSellerStatus = selectedSeller ? getSellerStatus(selectedSeller) : "draft";
+  const resultRecord = useMemo(
+    () => (result && typeof result === "object" ? (result as Record<string, unknown>) : null),
+    [result],
+  );
+  const outputPreview = useMemo(() => {
+    if (!resultRecord) return "";
+    if (typeof resultRecord.output === "string") return resultRecord.output;
+    const nestedResult = resultRecord.result;
+    if (nestedResult && typeof nestedResult === "object") {
+      const nestedRecord = nestedResult as Record<string, unknown>;
+      if (typeof nestedRecord.summary === "string") return nestedRecord.summary;
+      if (typeof nestedRecord.output === "string") return nestedRecord.output;
+    }
+    return "";
+  }, [resultRecord]);
+  const rawResultJson = useMemo(() => {
+    if (result == null) return "";
+    try {
+      return JSON.stringify(result, null, 2);
+    } catch {
+      return String(result);
+    }
+  }, [result]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listSellerTools()
+      .then((tools) => {
+        if (!cancelled) setToolOptions(tools);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load seller tools.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!currentUser) {
       setLoadError("Please log in to test seller agents.");
       return;
     }
-    if (sellerAgents.length === 0 && isReady) {
+    if (ownedSellerAgents.length === 0 && isReady) {
       setLoadError("No seller agents available. Please create one first.");
-    } else if (sellerAgents.length > 0 && !selectedAgentId) {
-      setSelectedAgentId(sellerAgents[0].id);
+    } else if (ownedSellerAgents.length > 0 && (!selectedAgentId || !ownedSellerAgents.some((agent) => agent.id === selectedAgentId))) {
+      const nextSellerId =
+        (selectedSellerId && ownedSellerAgents.some((agent) => agent.id === selectedSellerId) && selectedSellerId) ||
+        ownedSellerAgents[0].id;
+      setSelectedAgentId(nextSellerId);
+      setSelectedSellerId(nextSellerId);
       setLoadError(null);
     }
-  }, [currentUser, sellerAgents, selectedAgentId, isReady]);
+  }, [currentUser, ownedSellerAgents, selectedAgentId, selectedSellerId, setSelectedSellerId, isReady]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,28 +114,25 @@ export function SellerTest() {
         seller_agent_id: selectedAgentId,
         user_id: currentUser.id,
       });
-
-      // Simple response: just has "output" text
-      const output = res.output || JSON.stringify(res);
-
-      if (!output) {
-        throw new Error("No output returned from research");
-      }
-
-      const normalizedResult: TestResearchResult = {
-        task_id: res.task_id || "test-task",
-        title: `Research: ${query.trim().slice(0, 50)}`,
-        summary: output,
-        bullets: [],
-        citations: [],
-      };
-
-      setResult(normalizedResult);
+      setResult(res);
     } catch (err) {
       console.error("Research error:", err);
       setError(err instanceof Error ? err.message : "Research failed");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!selectedSeller) return;
+    setError(null);
+    setIsPublishing(true);
+    try {
+      await setSellerStatus(selectedSeller.id, "published");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to publish seller agent.");
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -137,13 +186,17 @@ export function SellerTest() {
                   ) : (
                     <select
                       value={selectedAgentId}
-                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedAgentId(e.target.value);
+                        setSelectedSellerId(e.target.value);
+                        setResult(null);
+                      }}
                       className="w-full border-2 border-black py-3 px-4 text-xs font-bold uppercase tracking-widest outline-none focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
                     >
-                      {sellerAgents.length === 0 ? (
+                      {ownedSellerAgents.length === 0 ? (
                         <option disabled>No agents available</option>
                       ) : (
-                        sellerAgents.map((agent) => (
+                        ownedSellerAgents.map((agent) => (
                           <option key={agent.id} value={agent.id}>
                             {agent.name}
                           </option>
@@ -153,6 +206,14 @@ export function SellerTest() {
                   )}
                 </div>
 
+                {selectedSeller ? (
+                  <div className="grid grid-cols-1 gap-3 border-2 border-black bg-gray-50 p-4 text-[10px] font-black uppercase tracking-[0.16em] text-black sm:grid-cols-3">
+                    <div>Status: {selectedSellerStatus}</div>
+                    <div>Price: {getSellerPrice(selectedSeller)} USDC</div>
+                    <div>Tools: {formatToolNames(getSellerToolIds(selectedSeller), toolOptions)}</div>
+                  </div>
+                ) : null}
+
                 <button
                   type="submit"
                   disabled={isLoading || !query.trim() || !selectedAgentId || !isReady || !currentUser}
@@ -161,12 +222,22 @@ export function SellerTest() {
                   {isLoading ? (
                     <>
                       <Loader2 size={16} className="animate-spin" />
-                      RESEARCHING...
+                      RUNNING...
                     </>
                   ) : (
-                    "RUN RESEARCH"
+                    "RUN TASK"
                   )}
                 </button>
+                {result && selectedSellerStatus === "draft" ? (
+                  <button
+                    type="button"
+                    onClick={handlePublish}
+                    disabled={isPublishing}
+                    className="border-2 border-black bg-white py-4 text-[10px] font-black uppercase tracking-[0.2em] text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isPublishing ? "PUBLISHING..." : "PUBLISH SELLER"}
+                  </button>
+                ) : null}
               </form>
             </div>
           )}
@@ -186,42 +257,50 @@ export function SellerTest() {
             </div>
           ) : result ? (
             <div className="border-2 border-black bg-white p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-xl font-bold uppercase tracking-tight text-black mb-6">{result.title}</h2>
-              <div className="prose prose-sm max-w-none text-gray-700">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    h1: ({ children }) => <h1 className="text-base font-black text-black">{children}</h1>,
-                    h2: ({ children }) => <h2 className="text-sm font-black text-black">{children}</h2>,
-                    h3: ({ children }) => <h3 className="text-sm font-bold text-black">{children}</h3>,
-                    p: ({ children }) => <p className="text-xs font-medium leading-relaxed">{children}</p>,
-                    ul: ({ children }) => <ul className="list-disc pl-5 text-xs font-medium space-y-1">{children}</ul>,
-                    ol: ({ children }) => (
-                      <ol className="list-decimal pl-5 text-xs font-medium space-y-1">{children}</ol>
-                    ),
-                    li: ({ children }) => <li>{children}</li>,
-                    strong: ({ children }) => <strong className="font-black text-black">{children}</strong>,
-                    code: ({ children }) => (
-                      <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-black">{children}</code>
-                    ),
-                    pre: ({ children }) => (
-                      <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px]">
-                        {children}
-                      </pre>
-                    ),
-                    blockquote: ({ children }) => (
-                      <blockquote className="border-l-2 border-gray-400 pl-3 italic text-gray-700">{children}</blockquote>
-                    ),
-                  }}
-                >
-                  {normalizeMarkdown(result.summary)}
-                </ReactMarkdown>
+              <h2 className="text-xl font-bold uppercase tracking-tight text-black mb-6">Task Output</h2>
+              {outputPreview ? (
+                <div className="prose prose-sm max-w-none text-gray-700">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      h1: ({ children }) => <h1 className="text-base font-black text-black">{children}</h1>,
+                      h2: ({ children }) => <h2 className="text-sm font-black text-black">{children}</h2>,
+                      h3: ({ children }) => <h3 className="text-sm font-bold text-black">{children}</h3>,
+                      p: ({ children }) => <p className="text-xs font-medium leading-relaxed">{children}</p>,
+                      ul: ({ children }) => <ul className="list-disc pl-5 text-xs font-medium space-y-1">{children}</ul>,
+                      ol: ({ children }) => (
+                        <ol className="list-decimal pl-5 text-xs font-medium space-y-1">{children}</ol>
+                      ),
+                      li: ({ children }) => <li>{children}</li>,
+                      strong: ({ children }) => <strong className="font-black text-black">{children}</strong>,
+                      code: ({ children }) => (
+                        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[11px] text-black">{children}</code>
+                      ),
+                      pre: ({ children }) => (
+                        <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px]">
+                          {children}
+                        </pre>
+                      ),
+                      blockquote: ({ children }) => (
+                        <blockquote className="border-l-2 border-gray-400 pl-3 italic text-gray-700">{children}</blockquote>
+                      ),
+                    }}
+                  >
+                    {normalizeMarkdown(outputPreview)}
+                  </ReactMarkdown>
+                </div>
+              ) : null}
+              <div className={outputPreview ? "mt-6" : ""}>
+                <p className="mb-2 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Raw Response</p>
+                <pre className="overflow-x-auto border border-gray-300 bg-gray-50 p-3 font-mono text-[11px] text-black">
+                  {rawResultJson}
+                </pre>
               </div>
             </div>
           ) : (
             <div className="border-2 border-dashed border-gray-300 bg-gray-50 p-8 flex items-center justify-center min-h-[200px]">
               <p className="text-xs font-bold uppercase tracking-widest text-gray-400 text-center">
-                Run a research query to see results here
+                Run a task to see output here
               </p>
             </div>
           )}

@@ -19,3 +19,4 @@ class OrchestratorState(TypedDict, total=False):
     transaction_hashes: Annotated[list[str], operator.add]
     payments: Annotated[list[PaymentRecord], operator.add]
     final_answer: str | None
+    error: str | None

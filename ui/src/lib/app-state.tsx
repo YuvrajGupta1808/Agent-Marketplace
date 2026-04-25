@@ -12,6 +12,8 @@ import {
   listAgents,
   listUserAgents,
   runMarketplace,
+  updateSellerConfig,
+  updateSellerStatus,
 } from "./api";
 
 interface AppStateValue {
@@ -34,6 +36,28 @@ interface AppStateValue {
     description: string;
     prompt: string;
     connectedSellerIds: string[];
+    llmConfig: {
+      provider: string;
+      model: string;
+    };
+    paymentConfig: {
+      maxPaymentUsdc: string;
+    };
+  }) => Promise<AgentRecord>;
+  createSellerAgent: (payload: {
+    name: string;
+    description: string;
+    prompt: string;
+    category: string;
+    priceUsdc: string;
+    builtInTools: string[];
+  }) => Promise<AgentRecord>;
+  setSellerStatus: (sellerId: string, status: "draft" | "published" | "disabled") => Promise<AgentRecord>;
+  updateSellerTools: (payload: {
+    sellerId: string;
+    category?: string;
+    priceUsdc?: string;
+    builtInTools: string[];
   }) => Promise<AgentRecord>;
   selectBuyerAgent: (buyerId: string) => void;
   setSelectedSellerId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -206,6 +230,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     description: string;
     prompt: string;
     connectedSellerIds: string[];
+    llmConfig: {
+      provider: string;
+      model: string;
+    };
+    paymentConfig: {
+      maxPaymentUsdc: string;
+    };
   }) => {
     if (!currentUser) {
       throw new Error("Register or log in before creating a buyer agent.");
@@ -222,6 +253,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       system_prompt: payload.prompt,
       metadata: {
         connected_seller_ids: payload.connectedSellerIds,
+        llm_config: {
+          provider: payload.llmConfig.provider,
+          model: payload.llmConfig.model,
+        },
+        payment_config: {
+          max_payment_usdc: payload.paymentConfig.maxPaymentUsdc,
+        },
       },
     });
     localStorage.setItem(STORAGE_KEYS.buyerId, response.agent.id);
@@ -233,6 +271,81 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (payload.connectedSellerIds[0]) {
       setSelectedSellerId(payload.connectedSellerIds[0]);
     }
+    return response.agent;
+  };
+
+  const createSellerAgentForUser = async (payload: {
+    name: string;
+    description: string;
+    prompt: string;
+    category: string;
+    priceUsdc: string;
+    builtInTools: string[];
+  }) => {
+    if (!currentUser) {
+      throw new Error("Register or log in before creating a seller agent.");
+    }
+    if (!health?.circle_enabled) {
+      throw new Error("Circle is not configured on the backend. Real Circle wallets are required.");
+    }
+
+    const response = await createAgent({
+      userId: currentUser.id,
+      role: "seller",
+      name: payload.name,
+      description: payload.description,
+      system_prompt: payload.prompt,
+      metadata: {
+        seller_type: "hosted",
+        status: "draft",
+        category: payload.category,
+        use_case: payload.description,
+        price_usdc: payload.priceUsdc,
+        built_in_tools: payload.builtInTools,
+      },
+    });
+    setSellerAgents((currentSellers) => {
+      const existing = currentSellers.filter((seller) => seller.id !== response.agent.id);
+      return [...existing, response.agent];
+    });
+    setSelectedSellerId(response.agent.id);
+    return response.agent;
+  };
+
+  const setSellerStatusForUser = async (sellerId: string, status: "draft" | "published" | "disabled") => {
+    if (!currentUser) {
+      throw new Error("Register or log in before updating a seller agent.");
+    }
+    const response = await updateSellerStatus({
+      agentId: sellerId,
+      userId: currentUser.id,
+      status,
+    });
+    setSellerAgents((currentSellers) =>
+      currentSellers.map((seller) => (seller.id === response.agent.id ? response.agent : seller)),
+    );
+    return response.agent;
+  };
+
+  const updateSellerToolsForUser = async (payload: {
+    sellerId: string;
+    category?: string;
+    priceUsdc?: string;
+    builtInTools: string[];
+  }) => {
+    if (!currentUser) {
+      throw new Error("Register or log in before updating a seller agent.");
+    }
+    const response = await updateSellerConfig({
+      agentId: payload.sellerId,
+      userId: currentUser.id,
+      category: payload.category,
+      priceUsdc: payload.priceUsdc,
+      builtInTools: payload.builtInTools,
+    });
+    setSellerAgents((currentSellers) =>
+      currentSellers.map((seller) => (seller.id === response.agent.id ? response.agent : seller)),
+    );
     return response.agent;
   };
 
@@ -300,6 +413,9 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       logout,
       refreshData,
       createBuyerAgent: createBuyerAgentForUser,
+      createSellerAgent: createSellerAgentForUser,
+      setSellerStatus: setSellerStatusForUser,
+      updateSellerTools: updateSellerToolsForUser,
       selectBuyerAgent,
       setSelectedSellerId,
       setLatestRun,

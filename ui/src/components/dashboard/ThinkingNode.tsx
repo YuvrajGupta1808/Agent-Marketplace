@@ -103,19 +103,19 @@ export function ThinkingNode({ isLoading, events }: ThinkingNodeProps) {
           let message = "";
           let type: ThinkingStep["type"] = "step";
 
-          if (node === "discover_seller") {
+          if (node.startsWith("discover_seller")) {
             message = `Discovering seller for: "${query.slice(0, 50)}..."`;
             type = "discovery";
-          } else if (node === "plan_research_steps") {
+          } else if (node.startsWith("plan_research_steps")) {
             message = `Planning research approach...`;
             type = "step";
-          } else if (node === "execute_payment") {
+          } else if (node.startsWith("execute_payment")) {
             message = `Preparing payment for research...`;
             type = "payment_request";
-          } else if (node === "send_research_request") {
+          } else if (node.startsWith("send_research")) {
             message = `Sending research request to seller...`;
             type = "research_sent";
-          } else if (node === "fetch_result") {
+          } else if (node.startsWith("fetch_result")) {
             message = `Fetching research results...`;
             type = "result_received";
           } else {
@@ -136,16 +136,17 @@ export function ThinkingNode({ isLoading, events }: ThinkingNodeProps) {
           const node = customData.node as string;
           const status = customData.status as string;
           const taskId = customData.task_id as string;
+          const errorMessage = customData.error as string | undefined;
 
           if (status === "error") {
             newSteps.push({
               id: `${taskId}-${node}-error-${Date.now()}`,
               type: "error",
-              message: `${nodeTitle} failed`,
+              message: errorMessage ? `${nodeTitle} failed: ${errorMessage}` : `${nodeTitle} failed`,
               timestamp: Date.now(),
               status: "error",
             });
-          } else if (node === "execute_payment" && customData.payment_details) {
+          } else if (node.startsWith("execute_payment") && customData.payment_details) {
             const paymentDetails = customData.payment_details as Record<string, unknown>;
             const amount = paymentDetails.amount_usdc as string;
             newSteps.push({
@@ -156,7 +157,7 @@ export function ThinkingNode({ isLoading, events }: ThinkingNodeProps) {
               timestamp: Date.now(),
               status: "complete",
             });
-          } else if (node === "fetch_result" && customData.research_result) {
+          } else if (node.startsWith("fetch_result") && customData.research_result) {
             const result = customData.research_result as Record<string, unknown>;
             const title = result.title as string;
             newSteps.push({
@@ -177,6 +178,14 @@ export function ThinkingNode({ isLoading, events }: ThinkingNodeProps) {
             status: "error",
           });
         }
+      } else if (event.type === "error") {
+        newSteps.push({
+          id: `stream-error-${Date.now()}`,
+          type: "error",
+          message: `Error: ${event.error || "Workflow failed."}`,
+          timestamp: Date.now(),
+          status: "error",
+        });
       }
     }
 

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import re
 
-from openai import OpenAI
-
 from buyer_agent.state import BuyerState
-from shared.config import get_settings
+from shared.llm_client import BuyerLlmNotConfigured, get_buyer_openai_client
 
 
 def _strip_synthesized_answer_prefix(answer: str) -> str:
@@ -22,6 +20,7 @@ def _strip_synthesized_answer_prefix(answer: str) -> str:
 def synthesize_results(state: BuyerState) -> dict:
     """Synthesize task results into a final answer using buyer agent's voice."""
     task_results = state.get("task_results", [])
+    task_errors = state.get("task_errors", [])
     agent_name = state.get("buyer_agent_name", "Buyer Agent")
     agent_description = state.get("buyer_agent_description", "")
     agent_system_prompt = state.get("buyer_agent_system_prompt", "")
@@ -30,6 +29,12 @@ def synthesize_results(state: BuyerState) -> dict:
     print(f"  🔗 synthesize_results: {len(task_results)} result(s)")
 
     if not task_results:
+        if task_errors:
+            first_error = task_errors[0].get("message", "Task failed before synthesis")
+            return {
+                "error": first_error,
+                "thinking": "No task results to synthesize because task execution failed",
+            }
         return {
             "final_answer": "No results were available to synthesize. All tasks may have failed.",
             "thinking": "No task results to synthesize",
@@ -43,12 +48,16 @@ def synthesize_results(state: BuyerState) -> dict:
             summary = result.get("summary", "")
             result_text += f"\n\n**{i}. {title}**\n{summary}"
 
-    settings = get_settings()
-    if not settings.live_llm_enabled or not task_results:
+    try:
+        client, llm_config = get_buyer_openai_client(state.get("buyer_agent_llm_config"))
+    except BuyerLlmNotConfigured as exc:
         # Fallback: just concatenate results
+        if task_errors:
+            error_lines = "\n".join(f"- {error.get('message', 'Unknown task error')}" for error in task_errors)
+            result_text = f"{result_text.strip()}\n\n**Errors**\n{error_lines}"
         return {
             "final_answer": result_text.strip() if result_text else "No synthesis available.",
-            "thinking": "LLM not available or no results, returning concatenated results",
+            "thinking": f"{exc} Returning concatenated results.",
         }
 
     # Build system message from agent identity
@@ -64,14 +73,9 @@ Integrate findings, highlight key insights, and respond in your voice.
 Do not begin with a meta label such as "Synthesized Answer:". Start with the answer content itself.
 """
 
-    client = OpenAI(
-        api_key=settings.featherless_api_key.get_secret_value(),
-        base_url=settings.featherless_base_url,
-    )
-
     try:
         completion = client.chat.completions.create(
-            model=settings.orchestrator_model,
+            model=llm_config["model"],
             messages=[
                 {"role": "system", "content": system_message},
                 {
@@ -85,10 +89,16 @@ Do not begin with a meta label such as "Synthesized Answer:". Start with the ans
 
         final_answer = _strip_synthesized_answer_prefix(completion.choices[0].message.content or "")
         if final_answer:
+            if task_errors:
+                error_lines = "\n".join(f"- {error.get('message', 'Unknown task error')}" for error in task_errors)
+                final_answer = f"{final_answer.strip()}\n\n**Errors**\n{error_lines}"
             print(f"    ✓ Synthesized answer ({len(final_answer)} chars)")
             return {"final_answer": final_answer, "thinking": ""}
         else:
             # Fallback: return concatenated results
+            if task_errors:
+                error_lines = "\n".join(f"- {error.get('message', 'Unknown task error')}" for error in task_errors)
+                result_text = f"{result_text.strip()}\n\n**Errors**\n{error_lines}"
             return {
                 "final_answer": result_text.strip() if result_text else "Synthesis failed.",
                 "thinking": "LLM returned empty response",
@@ -97,6 +107,9 @@ Do not begin with a meta label such as "Synthesized Answer:". Start with the ans
     except Exception as e:
         print(f"    ⚠️ Synthesis error: {e}")
         # Fallback: return concatenated results
+        if task_errors:
+            error_lines = "\n".join(f"- {error.get('message', 'Unknown task error')}" for error in task_errors)
+            result_text = f"{result_text.strip()}\n\n**Errors**\n{error_lines}"
         return {
             "final_answer": result_text.strip() if result_text else f"Synthesis error: {str(e)}",
             "thinking": f"Synthesis error: {str(e)}",

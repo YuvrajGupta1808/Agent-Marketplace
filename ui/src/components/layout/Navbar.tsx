@@ -28,32 +28,32 @@ export function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white backdrop-blur-md">
-      <div className="flex items-center justify-between px-8 py-4">
-        <div className="flex items-center gap-8">
+      <div className="relative flex items-center justify-between px-8 py-4">
+        <div className="flex items-center">
           <Link to="/" className="flex items-center gap-2">
             <Bot size={24} className="text-black" />
             <h1 className="text-2xl font-black tracking-tighter uppercase text-black hidden sm:block">Agent.Flow</h1>
           </Link>
-          
-          <div className="hidden md:flex gap-6 text-sm font-medium text-gray-500 uppercase tracking-widest">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = location.pathname === item.path;
-              return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className={cn(
-                    "flex items-center gap-2 transition-colors hover:text-black",
-                    isActive ? "text-black" : "text-gray-500"
-                  )}
-                >
-                  <Icon size={16} />
-                  <span>{item.name}</span>
-                </Link>
-              );
-            })}
-          </div>
+        </div>
+
+        <div className="absolute left-1/2 hidden -translate-x-1/2 md:flex gap-6 text-sm font-medium text-gray-500 uppercase tracking-widest">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = location.pathname === item.path;
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={cn(
+                  "flex items-center gap-2 transition-colors hover:text-black",
+                  isActive ? "text-black" : "text-gray-500"
+                )}
+              >
+                <Icon size={16} />
+                <span>{item.name}</span>
+              </Link>
+            );
+          })}
         </div>
         
         <div className="flex items-center gap-4">

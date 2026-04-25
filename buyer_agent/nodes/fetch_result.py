@@ -84,6 +84,6 @@ def fetch_result(state: BuyerState) -> dict:
         print(f"    ✓ Result fetched: {structured_result.title[:40]}")
         return {"result": structured_result.model_dump()}
     except Exception as e:
-        error_msg = f"fetch_result error: {type(e).__name__}: {str(e)[:80]}"
+        error_msg = f"fetch_result error: {type(e).__name__}: {e}"
         print(f"    ❌ {error_msg}")
         return {"error": error_msg}

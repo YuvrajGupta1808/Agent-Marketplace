@@ -11,6 +11,40 @@ from shared.repository import repository
 from shared.types import BuyerWorkflowRecord, PaymentRecord, ResearchResult
 
 
+def _collect_research_results(result: dict) -> list[ResearchResult]:
+    records: list[ResearchResult] = []
+    for item in result.get("task_results", []):
+        try:
+            records.append(ResearchResult.model_validate(item))
+        except Exception:
+            continue
+    if not records and result.get("result"):
+        try:
+            records.append(ResearchResult.model_validate(result["result"]))
+        except Exception:
+            pass
+    return records
+
+
+def _collect_payments(results: list[ResearchResult]) -> tuple[list[str], list[PaymentRecord]]:
+    tx_hashes: list[str] = []
+    payments: list[PaymentRecord] = []
+    for research_result in results:
+        if research_result.tx_hash:
+            tx_hashes.append(research_result.tx_hash)
+        if research_result.circle_transaction_id:
+            payments.append(
+                PaymentRecord(
+                    task_id=research_result.task_id,
+                    circle_transaction_id=research_result.circle_transaction_id,
+                    amount_usdc=research_result.amount_usdc or "0",
+                    tx_hash=research_result.tx_hash,
+                    state="CONFIRMED" if research_result.tx_hash else "INITIATED",
+                )
+            )
+    return tx_hashes, payments
+
+
 def buyer_agent_node(state: dict) -> dict:
     """Execute autonomous buyer agent for the user goal."""
     print(f"\n🤖 buyer_agent_node: user_goal='{state['user_goal'][:50]}'")
@@ -35,6 +69,8 @@ def buyer_agent_node(state: dict) -> dict:
             "buyer_agent_description": buyer_agent.description,
             "buyer_agent_system_prompt": buyer_agent.system_prompt,
             "buyer_agent_connected_seller_ids": connected_seller_ids,
+            "buyer_agent_llm_config": buyer_agent.metadata.get("llm_config", {}) if isinstance(buyer_agent.metadata, dict) else {},
+            "buyer_agent_payment_config": buyer_agent.metadata.get("payment_config", {}) if isinstance(buyer_agent.metadata, dict) else {},
             # Backwards compat
             "seller_agent_id": state.get("seller_agent_id"),
         },
@@ -47,56 +83,55 @@ def buyer_agent_node(state: dict) -> dict:
             node_outputs=trace,
         )
     ]
+    task_errors = result.get("task_errors", [])
+    failed_task_ids = [
+        str(error.get("task_id", "unknown"))
+        for error in task_errors
+        if isinstance(error, dict)
+    ]
 
     if result.get("error"):
         return {
             "buyer_workflows": buyer_workflows,
-            "failed_tasks": [result.get("task_id", "unknown")],
+            "failed_tasks": failed_task_ids or [result.get("task_id", "unknown")],
             "payments": [],
+            "transaction_hashes": [],
+            "results": [],
             "final_answer": None,
+            "error": result["error"],
         }
 
     # If we have a final_answer (from synthesize_results), use it
     final_answer = result.get("final_answer")
     if final_answer:
+        research_results = _collect_research_results(result)
+        tx_hashes, payments = _collect_payments(research_results)
         return {
             "buyer_workflows": buyer_workflows,
-            "failed_tasks": [],
-            "payments": [],
-            "transaction_hashes": [],
-            "results": [],
+            "payments": payments,
+            "transaction_hashes": tx_hashes,
+            "results": research_results,
             "final_answer": final_answer,
+            "failed_tasks": failed_task_ids,
         }
 
     # Otherwise, extract result if it exists
     if result.get("result"):
         research_result = ResearchResult.model_validate(result["result"])
-        tx_hash = research_result.tx_hash
-
-        payments = []
-        if research_result.circle_transaction_id:
-            payments.append(
-                PaymentRecord(
-                    task_id=research_result.task_id,
-                    circle_transaction_id=research_result.circle_transaction_id,
-                    amount_usdc=research_result.amount_usdc or "0",
-                    tx_hash=tx_hash,
-                    state="CONFIRMED" if tx_hash else "INITIATED",
-                )
-            )
+        tx_hashes, payments = _collect_payments([research_result])
 
         return {
             "results": [research_result],
             "buyer_workflows": buyer_workflows,
-            "transaction_hashes": [tx_hash] if tx_hash else [],
+            "transaction_hashes": tx_hashes,
             "payments": payments,
-            "failed_tasks": [],
+            "failed_tasks": failed_task_ids,
             "final_answer": None,
         }
 
     return {
         "buyer_workflows": buyer_workflows,
-        "failed_tasks": [],
+        "failed_tasks": failed_task_ids,
         "payments": [],
         "transaction_hashes": [],
         "results": [],

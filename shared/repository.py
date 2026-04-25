@@ -111,8 +111,9 @@ class MarketplaceRepository:
         self,
         request: CreateAgentRequest,
         wallet: Any,
+        agent_id: str | None = None,
     ) -> AgentRecord:
-        agent_id = str(uuid.uuid4())
+        agent_id = agent_id or str(uuid.uuid4())
         wallet_id = str(uuid.uuid4())
         created_at = utc_now()
         metadata_json = json.dumps(request.metadata, sort_keys=True)
@@ -213,6 +214,17 @@ class MarketplaceRepository:
         if not row:
             raise KeyError(f"Agent {agent_id} not found.")
         return self._agent_from_row(row)
+
+    def update_agent_metadata(self, agent_id: str, metadata: dict[str, Any]) -> AgentRecord:
+        metadata_json = json.dumps(metadata, sort_keys=True)
+        with db_cursor() as connection:
+            cursor = connection.execute(
+                "UPDATE agents SET metadata_json = ? WHERE id = ?",
+                (metadata_json, agent_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Agent {agent_id} not found.")
+        return self.get_agent(agent_id)
 
     def get_wallet(self, wallet_id: str) -> WalletRecord:
         with db_cursor() as connection:

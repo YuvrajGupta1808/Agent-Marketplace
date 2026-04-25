@@ -31,11 +31,21 @@ class Settings(BaseSettings):
 
     featherless_api_key: SecretStr | None = None
     featherless_base_url: str = "https://api.featherless.ai/v1"
+    aiml_api_key: SecretStr | None = None
+    aimlapi_api_key: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
     orchestrator_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     seller_model: str = "meta-llama/Llama-3.1-8B-Instruct"
     thinking_model: str = "Qwen/QwQ-32B-Preview"
     seller_max_tokens: int = 1400
     synthesizer_max_tokens: int = 1600
+
+    tavily_api_key: SecretStr | None = None
+    yutori_api_key: SecretStr | None = None
+    yutori_poll_timeout_seconds: float = 25.0
+    yutori_poll_interval_seconds: float = 2.0
+    mediastack_api_key: SecretStr | None = None
+    newsapi_api_key: SecretStr | None = None
 
     circle_api_key: SecretStr | None = None
     circle_entity_secret: SecretStr | None = None

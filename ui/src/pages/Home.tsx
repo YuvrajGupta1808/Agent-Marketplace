@@ -2,6 +2,7 @@ import { ShoppingCart, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppState } from "../lib/app-state";
+import { formatToolNames, getSellerPrice, getSellerStatus, getSellerToolIds, isSellerPublished } from "../lib/seller";
 
 export function Home() {
   const navigate = useNavigate();
@@ -13,18 +14,25 @@ export function Home() {
     const normalizedQuery = query.trim().toLowerCase();
     return sellerAgents.filter((agent) => {
       const isMine = !!currentUser && agent.user_id === currentUser.id;
+      const isPublished = isSellerPublished(agent);
       const passesOwnershipFilter =
-        ownershipFilter === "all" || (ownershipFilter === "mine" ? isMine : !isMine);
+        ownershipFilter === "mine"
+          ? isMine
+          : ownershipFilter === "not_mine"
+            ? isPublished && !isMine
+            : isPublished;
       if (!passesOwnershipFilter) {
         return false;
       }
 
-      const description = typeof agent.metadata.description === "string" ? agent.metadata.description : "";
+      const description =
+        typeof agent.metadata.description === "string" ? agent.metadata.description : agent.description;
+      const useCase = typeof agent.metadata.use_case === "string" ? agent.metadata.use_case : "";
       const category = typeof agent.metadata.category === "string" ? agent.metadata.category : "";
       if (!normalizedQuery) {
         return true;
       }
-      return [agent.name, description, category].some((value) =>
+      return [agent.name, description, useCase, category].some((value) =>
         value.toLowerCase().includes(normalizedQuery),
       );
     });
@@ -79,7 +87,7 @@ export function Home() {
         <div className="border-2 border-black bg-gray-50 p-8 text-center shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
           <p className="text-xs font-black uppercase tracking-[0.15em] text-black">No seller agents available</p>
           <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-gray-500">
-            Seller agent creation is not wired from this UI yet. Add seller agents through the backend or your separate seller flow.
+            Create a hosted seller in Builder, test it, then publish it here.
           </p>
         </div>
       ) : (
@@ -89,17 +97,14 @@ export function Home() {
           const description =
             typeof agent.metadata.description === "string"
               ? agent.metadata.description
-              : "No marketplace description provided.";
-          const useCase =
-            typeof agent.metadata.use_case === "string"
-              ? agent.metadata.use_case
-              : "No use case provided.";
+              : agent.description || "No marketplace description provided.";
           const category =
             typeof agent.metadata.category === "string" ? agent.metadata.category : "Uncategorized";
           const creatorName =
             typeof agent.metadata.creator_name === "string" ? agent.metadata.creator_name : null;
-          const priceLabel =
-            health?.seller_price_usdc != null ? `${health.seller_price_usdc.toFixed(3)} USDC` : "Price unavailable";
+          const priceLabel = `${getSellerPrice(agent)} USDC`;
+          const status = getSellerStatus(agent);
+          const toolsLabel = formatToolNames(getSellerToolIds(agent));
 
           return (
           <div
@@ -109,7 +114,7 @@ export function Home() {
             <div className="p-8">
               <div className="mb-6 flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
-                  {category}
+                  {status === "published" ? category : `${category} / ${status}`}
                 </span>
                 <span className="font-mono text-sm font-bold text-black border-b-2 border-black pb-0.5">
                   {priceLabel}
@@ -121,8 +126,8 @@ export function Home() {
               )}
               <p className="text-sm font-medium leading-relaxed text-gray-600 line-clamp-3">{description}</p>
               <div className="mt-5 border-t-2 border-dashed border-gray-200 pt-4">
-                <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">Use Case</p>
-                <p className="mt-2 text-xs font-bold uppercase tracking-widest text-black">{useCase}</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.15em] text-gray-500">Tools</p>
+                <p className="mt-2 text-xs font-bold uppercase tracking-widest text-black">{toolsLabel}</p>
               </div>
             </div>
             <div className="mt-auto border-t-2 border-black">

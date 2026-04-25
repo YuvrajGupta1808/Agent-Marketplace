@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from openai import OpenAI
-
 from buyer_agent.state import BuyerState
 from buyer_agent.utils import extract_json
-from shared.config import get_settings
+from shared.llm_client import BuyerLlmNotConfigured, get_buyer_openai_client
 
 
 def validate_scope(state: BuyerState) -> dict:
@@ -17,13 +15,14 @@ def validate_scope(state: BuyerState) -> dict:
 
     print(f"  ✓ validate_scope: '{query[:50]}'")
 
-    settings = get_settings()
-    if not settings.live_llm_enabled:
+    try:
+        client, llm_config = get_buyer_openai_client(state.get("buyer_agent_llm_config"))
+    except BuyerLlmNotConfigured as exc:
         # If LLM not available, accept the goal (conservative fallback)
         return {
             "within_scope": True,
             "scope_rejection_reason": "",
-            "thinking": "LLM not available, accepting goal by default",
+            "thinking": f"{exc} Accepting goal by default.",
         }
 
     # Build system message from agent identity
@@ -45,14 +44,9 @@ Return ONLY valid JSON:
     "reason": "brief explanation"
 }"""
 
-    client = OpenAI(
-        api_key=settings.featherless_api_key.get_secret_value(),
-        base_url=settings.featherless_base_url,
-    )
-
     try:
         completion = client.chat.completions.create(
-            model=settings.orchestrator_model,
+            model=llm_config["model"],
             messages=[
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": f"User goal: {query}\n\nCan you handle this?"},

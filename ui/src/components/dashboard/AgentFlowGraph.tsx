@@ -11,6 +11,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 import type { AgentRecord, RunResponse } from '../../lib/api';
+import { isSellerPublished } from '../../lib/seller';
 
 function buildGraph(
   buyer: AgentRecord | null,
@@ -25,7 +26,7 @@ function buildGraph(
   const connectedSellerIds = Array.isArray(buyer.metadata.connected_seller_ids)
     ? (buyer.metadata.connected_seller_ids as string[])
     : sellerAgents.map((seller) => seller.id);
-  const connectedSellers = sellerAgents.filter((seller) => connectedSellerIds.includes(seller.id));
+  const connectedSellers = sellerAgents.filter((seller) => isSellerPublished(seller) && connectedSellerIds.includes(seller.id));
 
   const nodes = [
     {
@@ -40,14 +41,16 @@ function buildGraph(
       data: { label: seller.name },
       position: { x: 80 + (index * 220), y: 220 },
       style: {
-        backgroundColor: seller.id === selectedSellerId ? '#000000' : '#ffffff',
-        color: seller.id === selectedSellerId ? '#ffffff' : '#000000',
+        backgroundColor: '#000000',
+        color: '#ffffff',
         borderRadius: '0px',
         padding: '12px 16px',
         border: '2px solid #000000',
         fontSize: '10px',
         fontWeight: 'bold',
         textTransform: 'uppercase',
+        letterSpacing: '0.08em',
+        boxShadow: '4px 4px 0px 0px rgba(0,0,0,1)',
       },
     })),
   ];
@@ -163,6 +166,7 @@ export function AgentFlowGraph({ buyer, sellerAgents, selectedSellerId, latestRu
           fitViewOptions={{ padding: 0.2 }}
           className="z-10 bg-transparent"
         >
+          <style>{`.react-flow__handle { opacity: 0 !important; pointer-events: none !important; }`}</style>
           <Controls className="rounded-none border-2 border-black bg-white fill-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]" />
         </ReactFlow>
       </div>
