@@ -25,6 +25,8 @@ export interface AgentRecord {
   user_id: string;
   role: AgentRole;
   name: string;
+  description: string;
+  system_prompt: string;
   endpoint_url?: string | null;
   created_at: string;
   wallet: WalletRecord;
@@ -170,6 +172,8 @@ export function createAgent(payload: {
   userId: string;
   role: AgentRole;
   name: string;
+  description?: string;
+  system_prompt?: string;
   endpointUrl?: string;
   metadata?: Record<string, unknown>;
 }) {
@@ -179,6 +183,8 @@ export function createAgent(payload: {
       user_id: payload.userId,
       role: payload.role,
       name: payload.name,
+      description: payload.description ?? "",
+      system_prompt: payload.system_prompt ?? "",
       endpoint_url: payload.endpointUrl,
       metadata: payload.metadata ?? {},
     }),
@@ -188,7 +194,7 @@ export function createAgent(payload: {
 export function runMarketplace(payload: {
   userGoal: string;
   buyerAgentId: string;
-  sellerAgentId: string;
+  sellerAgentId?: string;
   threadId?: string;
 }) {
   return apiRequest<RunResponse>("/run", {
@@ -196,7 +202,7 @@ export function runMarketplace(payload: {
     body: JSON.stringify({
       user_goal: payload.userGoal,
       buyer_agent_id: payload.buyerAgentId,
-      seller_agent_id: payload.sellerAgentId,
+      seller_agent_id: payload.sellerAgentId ?? null,
       thread_id: payload.threadId ?? `ui-${crypto.randomUUID()}`,
     }),
   });
@@ -277,6 +283,51 @@ export async function* streamMarketplace(payload: {
   }
 }
 
+export interface TestResearchRequest {
+  query: string;
+  seller_agent_id: string;
+  user_id: string;
+  task_id?: string;
+}
+
+export interface TestResearchResult {
+  task_id: string;
+  title: string;
+  summary: string;
+  bullets: string[];
+  citations: Array<{ title: string; url: string; snippet: string }>;
+  output?: string;
+  result?: Record<string, unknown>;
+}
+
+const SELLER_BASE_URL = (() => {
+  const envUrl = (import.meta.env.VITE_SELLER_BASE_URL as string | undefined)?.replace(/\/$/, "");
+  if (envUrl) return envUrl;
+  if (typeof window !== "undefined" && window.location.hostname !== "localhost") {
+    return `${window.location.protocol}//${window.location.hostname}`;
+  }
+  return "http://127.0.0.1:8001";
+})();
+
+export function testResearch(payload: TestResearchRequest): Promise<TestResearchResult> {
+  return fetch(`${SELLER_BASE_URL}/research/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: payload.query,
+      seller_agent_id: payload.seller_agent_id,
+      user_id: payload.user_id,
+      task_id: payload.task_id ?? `test-${crypto.randomUUID()}`,
+    }),
+  }).then(async (r) => {
+    if (!r.ok) {
+      const text = await r.text();
+      throw new Error(text || `HTTP ${r.status}`);
+    }
+    return r.json() as Promise<TestResearchResult>;
+  });
+}
+
 export function getHealth() {
   return apiRequest<HealthResponse>("/health");
 }
@@ -292,6 +343,7 @@ export interface Transaction {
   tx_hash: string | null;
   state: string;
   created_at: string;
+  metadata_json?: string;
   metadata: Record<string, unknown>;
 }
 

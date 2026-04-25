@@ -11,6 +11,7 @@ import { Home as Marketplace } from "./pages/Home";
 import { Landing } from "./pages/Landing";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { SellerTest } from "./pages/SellerTest";
 import { Wallet } from "./pages/Wallet";
 
 function AppShell() {
@@ -29,6 +30,7 @@ function AppShell() {
           <Route path="/builder" element={<Builder />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/wallet" element={<Wallet />} />
+          <Route path="/seller-test" element={<SellerTest />} />
         </Routes>
       </main>
     </div>

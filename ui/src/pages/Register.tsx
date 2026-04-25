@@ -50,7 +50,7 @@ export function Register() {
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
                 placeholder="AGENT_MASTER_99"
-                className="w-full bg-white border-2 border-black px-4 py-3 text-xs font-bold uppercase tracking-widest outline-none transition-all focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                className="w-full bg-white border-2 border-black px-4 py-3 text-xs font-bold tracking-widest outline-none transition-all focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
               />
             </div>
             <div>
@@ -61,7 +61,7 @@ export function Register() {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="HELLO@EXAMPLE.COM"
-                className="w-full bg-white border-2 border-black px-4 py-3 text-xs font-bold uppercase tracking-widest outline-none transition-all focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                className="w-full bg-white border-2 border-black px-4 py-3 text-xs font-bold tracking-widest outline-none transition-all focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
               />
             </div>
             {error ? (

@@ -189,8 +189,8 @@ export function ThinkingNode({ isLoading, events }: ThinkingNodeProps) {
   }
 
   return (
-    <div className="flex justify-start mb-3">
-      <div className="bg-white border-2 border-black max-w-[85%]">
+    <div className="flex w-full justify-start mb-3">
+      <div className="w-full max-w-[85%] bg-white border-2 border-black">
         {/* Header */}
         <button
           onClick={() => setExpanded(!expanded)}

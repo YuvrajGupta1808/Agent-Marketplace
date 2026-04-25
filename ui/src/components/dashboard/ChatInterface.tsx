@@ -1,5 +1,5 @@
 import { Send } from "lucide-react";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { streamMarketplace } from "../../lib/api";
@@ -9,8 +9,10 @@ import { ThinkingNode } from "./ThinkingNode";
 
 interface ChatInterfaceProps {
   buyer: AgentRecord | null;
+  buyerAgents: AgentRecord[];
   sellerAgents: AgentRecord[];
   selectedSellerId: string | null;
+  onSelectBuyerAgent: (buyerId: string) => void;
   setSelectedSellerId: (sellerId: string) => void;
   onRunWorkflow: (goal: string) => Promise<RunResponse>;
   isCircleEnabled: boolean;
@@ -61,16 +63,35 @@ function normalizeChatContent(content: string): string {
   return normalized;
 }
 
+function getBuyerUseCaseMessage(buyer: AgentRecord | null): string {
+  if (!buyer) {
+    return "Select or create a buyer agent to begin.";
+  }
+
+  const metadataUseCase =
+    (typeof buyer.metadata.use_case === "string" && buyer.metadata.use_case.trim()) ||
+    (typeof buyer.metadata.description === "string" && buyer.metadata.description.trim()) ||
+    "";
+
+  const useCase = buyer.description?.trim() || metadataUseCase;
+  if (useCase) return useCase;
+
+  return `${buyer.name} is ready. Choose a seller, then send a research request.`;
+}
+
 export function ChatInterface({
   buyer,
+  buyerAgents,
   sellerAgents,
   selectedSellerId,
+  onSelectBuyerAgent,
   setSelectedSellerId,
   onRunWorkflow,
   isCircleEnabled,
+  transactionHistoryRef,
 }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
-    { role: "agent", content: "Backend workflow ready. Choose a seller, then send a research request.", id: "init" }
+    { role: "agent", content: getBuyerUseCaseMessage(buyer), id: "init" }
   ]);
   const [input, setInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -81,6 +102,12 @@ export function ChatInterface({
     ? (buyer?.metadata.connected_seller_ids as string[])
     : sellerAgents.map((seller) => seller.id);
   const availableSellers = sellerAgents.filter((seller) => connectedSellerIds.includes(seller.id));
+
+  useEffect(() => {
+    setMessages([{ role: "agent", content: getBuyerUseCaseMessage(buyer), id: "init" }]);
+    setStreamEvents([]);
+    setCurrentUserMsgId(null);
+  }, [buyer?.id, buyer?.name, buyer?.description, buyer?.metadata]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,11 +188,29 @@ export function ChatInterface({
   return (
     <div className="flex h-full flex-col bg-gray-50/50">
       {/* Header */}
-      <div className="border-b-4 border-black bg-white px-6 py-4 flex items-center gap-2">
+      <div className="border-b-4 border-black bg-white px-6 py-4 flex items-center gap-3">
         <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse z-10"></div>
         <span className="text-[10px] font-black uppercase tracking-[0.2em] text-black">
-          Chat: {buyer?.name ?? "No Buyer Agent"}
+          Chat:
         </span>
+        {buyerAgents.length > 0 ? (
+          <select
+            aria-label="Select buyer agent"
+            value={buyer?.id ?? ""}
+            onChange={(event) => onSelectBuyerAgent(event.target.value)}
+            className="max-w-[280px] border-2 border-black bg-white px-3 py-1 text-[10px] font-black uppercase tracking-[0.16em] text-black outline-none"
+          >
+            {buyerAgents.map((buyerAgent) => (
+              <option key={buyerAgent.id} value={buyerAgent.id}>
+                {buyerAgent.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">
+            No Buyer Agent
+          </span>
+        )}
       </div>
 
       {/* Messages - Only this scrolls */}
@@ -236,7 +281,7 @@ export function ChatInterface({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="COMMAND AGENT..."
-            className="w-full bg-white border-2 border-black py-4 pl-6 pr-14 text-xs font-bold uppercase tracking-widest rounded-none focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all"
+            className="w-full bg-white border-2 border-black py-4 pl-6 pr-14 text-xs font-bold tracking-widest rounded-none focus:outline-none focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-all"
           />
           <button
             type="submit"

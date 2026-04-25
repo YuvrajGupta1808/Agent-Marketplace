@@ -20,12 +20,14 @@ function VerticalResizeHandle() {
 export function Dashboard() {
   const transactionHistoryRef = useRef<TransactionHistoryRef>(null);
   const {
+    buyerAgents,
     currentBuyer,
     health,
     latestRun,
     runBuyerWorkflow,
     selectedSellerId,
     sellerAgents,
+    selectBuyerAgent,
     setSelectedSellerId,
   } = useAppState();
 
@@ -40,7 +42,7 @@ export function Dashboard() {
             orientation="vertical"
             className="h-full min-h-0 min-w-0 w-full"
           >
-            <Panel defaultSize={70} minSize={30} className="min-h-0 min-w-0">
+            <Panel defaultSize={35} minSize={25} className="min-h-0 min-w-0">
               <div className="h-full min-h-0 w-full overflow-hidden bg-gray-50">
                 <AgentFlowGraph
                   buyer={currentBuyer}
@@ -53,7 +55,7 @@ export function Dashboard() {
 
             <VerticalResizeHandle />
 
-            <Panel defaultSize={30} minSize={20} className="min-h-0 min-w-0">
+            <Panel defaultSize={65} minSize={45} className="min-h-0 min-w-0">
               <div className="h-full min-h-0 w-full overflow-hidden bg-white">
                 <TransactionHistory ref={transactionHistoryRef} latestRun={latestRun} />
               </div>
@@ -67,7 +69,9 @@ export function Dashboard() {
           <div className="h-full min-h-0 w-full overflow-hidden bg-white">
             <ChatInterface
               buyer={currentBuyer}
+              buyerAgents={buyerAgents}
               sellerAgents={sellerAgents}
+              onSelectBuyerAgent={selectBuyerAgent}
               selectedSellerId={selectedSellerId}
               setSelectedSellerId={(sellerId) => setSelectedSellerId(sellerId || null)}
               onRunWorkflow={runBuyerWorkflow}

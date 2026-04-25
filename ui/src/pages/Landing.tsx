@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, Terminal } from "lucide-react";
+import { ArrowRight, ChevronRight } from "lucide-react";
 
 export function Landing() {
   return (
@@ -9,7 +9,7 @@ export function Landing() {
 
       <main className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-2 text-center sm:gap-4 sm:px-8 sm:py-4">
         <div className="mb-0 inline-flex border-2 border-black bg-black p-3 text-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-transform hover:-translate-y-1 sm:border-4 sm:p-3.5">
-          <Terminal className="h-6 w-6 sm:h-7 sm:w-7" strokeWidth={2.5} />
+          <ChevronRight className="h-6 w-6 sm:h-7 sm:w-7" strokeWidth={3} />
         </div>
 
         <h1 className="max-w-4xl text-2xl font-black uppercase leading-[0.95] tracking-tighter text-black sm:max-w-5xl sm:text-3xl md:text-4xl lg:text-5xl">

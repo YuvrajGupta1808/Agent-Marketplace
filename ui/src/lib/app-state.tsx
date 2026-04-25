@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   AgentRecord,
   HealthResponse,
@@ -17,6 +17,7 @@ import {
 interface AppStateValue {
   currentUser: UserRecord | null;
   currentBuyer: AgentRecord | null;
+  buyerAgents: AgentRecord[];
   sellerAgents: AgentRecord[];
   selectedSellerId: string | null;
   latestRun: RunResponse | null;
@@ -34,6 +35,7 @@ interface AppStateValue {
     prompt: string;
     connectedSellerIds: string[];
   }) => Promise<AgentRecord>;
+  selectBuyerAgent: (buyerId: string) => void;
   setSelectedSellerId: React.Dispatch<React.SetStateAction<string | null>>;
   setLatestRun: React.Dispatch<React.SetStateAction<RunResponse | null>>;
   runBuyerWorkflow: (userGoal: string) => Promise<RunResponse>;
@@ -71,6 +73,7 @@ function mergePayments(existing: PaymentRecord[], incoming: PaymentRecord[]): Pa
 export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
   const [currentBuyer, setCurrentBuyer] = useState<AgentRecord | null>(null);
+  const [buyerAgents, setBuyerAgents] = useState<AgentRecord[]>([]);
   const [sellerAgents, setSellerAgents] = useState<AgentRecord[]>([]);
   const [selectedSellerId, setSelectedSellerId] = useState<string | null>(null);
   const [latestRun, setLatestRun] = useState<RunResponse | null>(null);
@@ -91,6 +94,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!userId) {
       setCurrentUser(null);
       setCurrentBuyer(null);
+      setBuyerAgents([]);
       setIsReady(true);
       return;
     }
@@ -105,6 +109,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem(STORAGE_KEYS.latestRun);
       setCurrentUser(null);
       setCurrentBuyer(null);
+      setBuyerAgents([]);
       setSelectedSellerId(sellers[0]?.id ?? null);
       setLatestRun(null);
       setAllPayments([]);
@@ -114,6 +119,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setCurrentUser(user);
 
     const buyers = await listUserAgents(userId, "buyer");
+    setBuyerAgents(buyers);
     const storedBuyerId = localStorage.getItem(STORAGE_KEYS.buyerId);
     const buyer = buyers.find((item) => item.id === storedBuyerId) ?? buyers.at(-1) ?? null;
     setCurrentBuyer(buyer);
@@ -189,6 +195,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(STORAGE_KEYS.latestRun);
     setCurrentUser(null);
     setCurrentBuyer(null);
+    setBuyerAgents([]);
     setSelectedSellerId(null);
     setLatestRun(null);
     setAllPayments([]);
@@ -211,19 +218,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       userId: currentUser.id,
       role: "buyer",
       name: payload.name,
+      description: payload.description,
+      system_prompt: payload.prompt,
       metadata: {
-        description: payload.description,
-        prompt: payload.prompt,
         connected_seller_ids: payload.connectedSellerIds,
       },
     });
     localStorage.setItem(STORAGE_KEYS.buyerId, response.agent.id);
     setCurrentBuyer(response.agent);
+    setBuyerAgents((currentBuyers) => {
+      const existing = currentBuyers.filter((buyer) => buyer.id !== response.agent.id);
+      return [...existing, response.agent];
+    });
     if (payload.connectedSellerIds[0]) {
       setSelectedSellerId(payload.connectedSellerIds[0]);
     }
     return response.agent;
   };
+
+  const selectBuyerAgent = useCallback((buyerId: string) => {
+    const buyer = buyerAgents.find((item) => item.id === buyerId);
+    if (!buyer) return;
+
+    localStorage.setItem(STORAGE_KEYS.buyerId, buyer.id);
+    setCurrentBuyer(buyer);
+    setLatestRun(null);
+
+    const sellerIdsFromBuyer = Array.isArray(buyer.metadata?.connected_seller_ids)
+      ? (buyer.metadata.connected_seller_ids as string[])
+      : [];
+    setSelectedSellerId((currentSellerId) => {
+      if (sellerIdsFromBuyer.length === 0) {
+        return currentSellerId ?? sellerAgents[0]?.id ?? null;
+      }
+      if (currentSellerId && sellerIdsFromBuyer.includes(currentSellerId)) {
+        return currentSellerId;
+      }
+      return sellerIdsFromBuyer.find((sellerId) => sellerAgents.some((seller) => seller.id === sellerId)) ?? null;
+    });
+  }, [buyerAgents, sellerAgents]);
 
   const runBuyerWorkflow = async (userGoal: string) => {
     if (!currentBuyer) {
@@ -232,9 +265,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     if (!health?.circle_enabled) {
       throw new Error("Circle is not configured on the backend. Real Circle payments are required.");
     }
-    if (!selectedSellerId) {
-      throw new Error("Select a seller agent before running the workflow.");
-    }
 
     setIsStreaming(true);
 
@@ -242,7 +272,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const result = await runMarketplace({
         userGoal,
         buyerAgentId: currentBuyer.id,
-        sellerAgentId: selectedSellerId,
+        // sellerAgentId is now optional - buyer agent picks from connected sellers
       });
       setLatestRun(result);
       // Keep full session ledger history while deduplicating repeated events.
@@ -257,6 +287,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     () => ({
       currentUser,
       currentBuyer,
+      buyerAgents,
       sellerAgents,
       selectedSellerId,
       latestRun,
@@ -269,11 +300,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       logout,
       refreshData,
       createBuyerAgent: createBuyerAgentForUser,
+      selectBuyerAgent,
       setSelectedSellerId,
       setLatestRun,
       runBuyerWorkflow,
     }),
-    [currentUser, currentBuyer, sellerAgents, selectedSellerId, latestRun, health, isReady, isStreaming, allPayments],
+    [currentUser, currentBuyer, buyerAgents, sellerAgents, selectedSellerId, latestRun, health, isReady, isStreaming, allPayments, selectBuyerAgent],
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
