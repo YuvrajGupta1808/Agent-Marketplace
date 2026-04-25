@@ -214,6 +214,17 @@ class MarketplaceRepository:
             raise KeyError(f"Agent {agent_id} not found.")
         return self._agent_from_row(row)
 
+    def update_agent_metadata(self, agent_id: str, metadata: dict[str, Any]) -> AgentRecord:
+        metadata_json = json.dumps(metadata, sort_keys=True)
+        with db_cursor() as connection:
+            cursor = connection.execute(
+                "UPDATE agents SET metadata_json = ? WHERE id = ?",
+                (metadata_json, agent_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Agent {agent_id} not found.")
+        return self.get_agent(agent_id)
+
     def get_wallet(self, wallet_id: str) -> WalletRecord:
         with db_cursor() as connection:
             row = connection.execute("SELECT * FROM wallets WHERE id = ?", (wallet_id,)).fetchone()

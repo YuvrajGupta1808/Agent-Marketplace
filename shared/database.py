@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,7 +83,64 @@ def initialize_database() -> None:
                 connection.execute(f"ALTER TABLE agents ADD COLUMN {col} {col_type}")
             except sqlite3.OperationalError:
                 pass  # Column already exists
-        connection.commit()
+
+        # One-time repair: recover seller tool mappings after accidental global overwrite.
+        # This migration is gated so it never rewrites sellers again after first successful run.
+        repaired = connection.execute(
+            "SELECT value FROM app_config WHERE key = 'seller_tools_repaired_v1'"
+        ).fetchone()
+        if not repaired:
+            seller_rows = connection.execute(
+                "SELECT id, name, metadata_json FROM agents WHERE role = 'seller'"
+            ).fetchall()
+            for row in seller_rows:
+                try:
+                    metadata = json.loads(row[2] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    metadata = {}
+
+                name = str(row[1] or "").strip().lower()
+                existing_tools = metadata.get("built_in_tools")
+                if not isinstance(existing_tools, list):
+                    existing_tools = metadata.get("tool_ids")
+                if not isinstance(existing_tools, list):
+                    existing_tools = []
+
+                # Preserve existing non-empty assignments by default.
+                next_tools = [str(tool).strip() for tool in existing_tools if str(tool).strip()]
+
+                # Apply expected defaults for known marketplace sellers.
+                if "duckduckgo" in name:
+                    next_tools = ["web_search"]
+                elif "geography" in name and "weather" in name:
+                    next_tools = ["tavily_search", "open_meteo_weather"]
+                elif "yutori" in name:
+                    next_tools = ["yutori_research"]
+                elif "utility" in name:
+                    next_tools = ["json_api_fetcher"]
+
+                # Dedupe while preserving order.
+                seen: set[str] = set()
+                deduped_tools: list[str] = []
+                for tool in next_tools:
+                    if tool in seen:
+                        continue
+                    seen.add(tool)
+                    deduped_tools.append(tool)
+
+                metadata["built_in_tools"] = deduped_tools
+                if "tool_ids" in metadata:
+                    metadata.pop("tool_ids", None)
+                connection.execute(
+                    "UPDATE agents SET metadata_json = ? WHERE id = ?",
+                    (json.dumps(metadata, sort_keys=True), row[0]),
+                )
+
+            connection.execute(
+                "INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?, ?, ?)",
+                ("seller_tools_repaired_v1", "true", utc_now()),
+            )
+            connection.commit()
 
 
 def get_connection() -> sqlite3.Connection:

@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 import re
 
-from openai import OpenAI
-
 from buyer_agent.state import BuyerState
 from buyer_agent.utils import extract_json
-from shared.config import get_settings
+from shared.llm_client import BuyerLlmNotConfigured, get_buyer_openai_client
 
 
 def _extract_json_deprecated(content: str) -> dict:
@@ -82,20 +80,15 @@ def _extract_json_deprecated(content: str) -> dict:
     raise ValueError(f"Failed to parse JSON after all recovery attempts. Original: {content[:300]}...")
 
 
-def _generate_research_plan_llm(query: str, agent_context: str = "") -> dict:
+def _generate_research_plan_llm(query: str, agent_context: str = "", llm_config: dict | None = None) -> dict:
     """Generate research plan using LLM."""
-    settings = get_settings()
-
-    if not settings.live_llm_enabled:
+    try:
+        client, resolved_llm_config = get_buyer_openai_client(llm_config)
+    except BuyerLlmNotConfigured as exc:
         raise RuntimeError(
             "LLM-based planning is required but not configured. "
-            "Please set FEATHERLESS_API_KEY environment variable."
-        )
-
-    client = OpenAI(
-        api_key=settings.featherless_api_key.get_secret_value(),
-        base_url=settings.featherless_base_url,
-    )
+            f"{exc}"
+        ) from exc
 
     system_content = "You are a strategic research planner. Return ONLY valid JSON.\n"
     if agent_context:
@@ -103,7 +96,7 @@ def _generate_research_plan_llm(query: str, agent_context: str = "") -> dict:
     system_content += '{"research_steps": [{"step": "action", "why": "relevance"}]}'
 
     completion = client.chat.completions.create(
-        model=settings.orchestrator_model,
+        model=resolved_llm_config["model"],
         messages=[
             {
                 "role": "system",
@@ -154,7 +147,7 @@ def plan_research_steps(state: BuyerState) -> dict:
     elif agent_name:
         agent_context = f"You are {agent_name}."
 
-    plan_data = _generate_research_plan_llm(query, agent_context=agent_context)
+    plan_data = _generate_research_plan_llm(query, agent_context=agent_context, llm_config=state.get("buyer_agent_llm_config"))
     thinking = plan_data.get("thinking", "")
     research_steps = plan_data.get("research_steps", [])
     print(f"    ✓ Generated {len(research_steps)} research step(s)")

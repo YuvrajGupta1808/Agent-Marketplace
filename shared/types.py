@@ -87,6 +87,18 @@ class CreateAgentRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class UpdateSellerStatusRequest(BaseModel):
+    user_id: str
+    status: Literal["draft", "published", "disabled"]
+
+
+class UpdateSellerConfigRequest(BaseModel):
+    user_id: str
+    category: str | None = None
+    price_usdc: str | None = None
+    built_in_tools: list[str] | None = None
+
+
 class ResearchRequest(BaseModel):
     task_id: str
     query: str
@@ -138,6 +150,7 @@ class RunResponse(BaseModel):
     thread_id: str
     final_answer: str | None = None
     running_answer: str | None = None
+    error: str | None = None
     query_intent: str = "research"
     is_conversational: bool = False
     task_specs: list[TaskSpec] = Field(default_factory=list)

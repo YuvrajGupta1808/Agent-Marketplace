@@ -24,10 +24,13 @@ except ImportError:
     CircleWalletBadRequestException = Exception  # type: ignore
 
 from orchestrator.graph import orchestrator_graph
+from shared.builtin_tools import list_builtin_tools
 from shared.circle_client import get_circle_client
 from shared.config import get_settings
+from shared.llm_providers import coerce_payment_limit, get_provider_api_key, list_provider_payloads, resolve_buyer_llm_config
 from shared.provisioning import ensure_circle_wallet_set_id
 from shared.repository import repository
+from shared.seller_config import normalize_seller_metadata
 from shared.ssl import configure_ssl_cert_file
 from shared.types import (
     CreateAgentRequest,
@@ -38,6 +41,8 @@ from shared.types import (
     ResumeRequest,
     RunRequest,
     RunResponse,
+    UpdateSellerConfigRequest,
+    UpdateSellerStatusRequest,
 )
 
 configure_ssl_cert_file()
@@ -111,9 +116,91 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
         raise HTTPException(status_code=500, detail=f"Wallet provisioning failed: {type(exc).__name__}: {str(exc)}") from exc
 
     enriched_metadata = {"creator_name": user.display_name, **request.metadata}
+    if request.role == "buyer":
+        llm_config = resolve_buyer_llm_config(
+            request.metadata.get("llm_config", {}) if isinstance(request.metadata, dict) else {}
+        )
+        provider_key = get_provider_api_key(llm_config["provider"])
+        if provider_key is None or not provider_key.get_secret_value().strip():
+            raise HTTPException(status_code=400, detail=f"Missing {llm_config['api_key_env']} for buyer model provider.")
+        payment_config = request.metadata.get("payment_config", {}) if isinstance(request.metadata, dict) else {}
+        enriched_metadata["llm_config"] = {
+            "provider": llm_config["provider"],
+            "model": llm_config["model"],
+            "tier": llm_config["tier"],
+            "payment_floor_usdc": llm_config["payment_floor_usdc"],
+        }
+        enriched_metadata["payment_config"] = {
+            "max_payment_usdc": coerce_payment_limit(
+                payment_config.get("max_payment_usdc") if isinstance(payment_config, dict) else None,
+                llm_config["payment_floor_usdc"],
+            )
+        }
+    if request.role == "seller":
+        enriched_metadata = normalize_seller_metadata(
+            {
+                "description": request.description,
+                "use_case": request.description,
+                **enriched_metadata,
+            },
+            status="draft",
+        )
     final_request = request.model_copy(update={"endpoint_url": endpoint_url, "metadata": enriched_metadata})
     agent = repository.create_agent(final_request, wallet)
     return CreateAgentResponse(agent=agent)
+
+
+@app.get("/seller-tools")
+def get_seller_tools() -> list[dict]:
+    return [tool.model_dump() for tool in list_builtin_tools()]
+
+
+@app.get("/llm-providers")
+def get_llm_providers() -> list[dict]:
+    return list_provider_payloads()
+
+
+@app.post("/agents/{agent_id}/seller-status", response_model=CreateAgentResponse)
+def update_seller_status(agent_id: str, request: UpdateSellerStatusRequest) -> CreateAgentResponse:
+    try:
+        seller = repository.get_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if seller.role != "seller":
+        raise HTTPException(status_code=400, detail="agent_id must reference a seller agent.")
+    if seller.user_id != request.user_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to update this seller agent.")
+
+    metadata = normalize_seller_metadata(seller.metadata, status=request.status)
+    updated = repository.update_agent_metadata(agent_id, metadata)
+    return CreateAgentResponse(agent=updated)
+
+
+@app.post("/agents/{agent_id}/seller-config", response_model=CreateAgentResponse)
+def update_seller_config(agent_id: str, request: UpdateSellerConfigRequest) -> CreateAgentResponse:
+    try:
+        seller = repository.get_agent(agent_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if seller.role != "seller":
+        raise HTTPException(status_code=400, detail="agent_id must reference a seller agent.")
+    if seller.user_id != request.user_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to update this seller agent.")
+
+    metadata = dict(seller.metadata)
+    if request.category is not None:
+        metadata["category"] = request.category
+    if request.price_usdc is not None:
+        metadata["price_usdc"] = request.price_usdc
+    if request.built_in_tools is not None:
+        known_tool_ids = {tool.id for tool in list_builtin_tools()}
+        metadata["built_in_tools"] = [tool_id for tool_id in request.built_in_tools if tool_id in known_tool_ids]
+
+    metadata = normalize_seller_metadata(metadata, status=str(metadata.get("status") or "draft"))
+    updated = repository.update_agent_metadata(agent_id, metadata)
+    return CreateAgentResponse(agent=updated)
 
 
 @app.get("/agents")
@@ -263,6 +350,7 @@ def run_marketplace(request: RunRequest) -> RunResponse:
         thread_id=request.thread_id,
         final_answer=result.get("final_answer"),
         running_answer=result.get("running_answer"),
+        error=result.get("error"),
         query_intent=result.get("query_intent", "research"),
         is_conversational=result.get("is_conversational", False),
         task_specs=result.get("task_specs", []),
@@ -335,7 +423,7 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
                 if chunk["type"] == "updates":
                     for node_name, state in chunk["data"].items():
                         # Capture final result and accumulate payments/task_specs
-                        if node_name == "synthesize_answer" or state.get("final_answer") or state.get("running_answer"):
+                        if node_name == "synthesize_answer" or state.get("final_answer") or state.get("running_answer") or state.get("error"):
                             final_result = state
                             all_payments = state.get("payments", [])
                             all_task_specs = state.get("task_specs", [])
@@ -365,9 +453,12 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
 
             # Emit final result with the answer
             if final_result:
-                final_answer = final_result.get("final_answer") or final_result.get("running_answer")
-                if final_answer:
-                    yield f"data: {json.dumps({'type': 'final_answer', 'answer': final_answer})}\n\n"
+                if final_result.get("error"):
+                    yield f"data: {json.dumps({'type': 'error', 'error': final_result['error']})}\n\n"
+                else:
+                    final_answer = final_result.get("final_answer") or final_result.get("running_answer")
+                    if final_answer:
+                        yield f"data: {json.dumps({'type': 'final_answer', 'answer': final_answer})}\n\n"
 
             yield f"data: {json.dumps({'type': 'stream_complete'})}\n\n"
 
@@ -413,6 +504,7 @@ def resume_marketplace(request: ResumeRequest) -> RunResponse:
         thread_id=request.thread_id,
         final_answer=result.get("final_answer"),
         running_answer=result.get("running_answer"),
+        error=result.get("error"),
         query_intent=result.get("query_intent", "research"),
         is_conversational=result.get("is_conversational", False),
         task_specs=result.get("task_specs", []),

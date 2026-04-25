@@ -16,6 +16,8 @@ class BuyerState(TypedDict, total=False):
     buyer_agent_description: str
     buyer_agent_system_prompt: str
     buyer_agent_connected_seller_ids: list[str]
+    buyer_agent_llm_config: dict[str, Any]
+    buyer_agent_payment_config: dict[str, Any]
 
     # Scope validation
     within_scope: bool
@@ -24,6 +26,7 @@ class BuyerState(TypedDict, total=False):
     # Task decomposition
     tasks: list[dict]
     task_results: list[dict]
+    task_errors: list[dict[str, Any]]
 
     # Synthesis
     final_answer: str

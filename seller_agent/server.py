@@ -14,6 +14,7 @@ from shared.config import get_settings
 from shared.circle_client import get_circle_client
 from shared.provisioning import ensure_circle_wallet_set_id
 from shared.repository import repository
+from shared.seller_config import is_seller_published, seller_price_usdc
 from shared.ssl import configure_ssl_cert_file
 from shared.types import AgentRecord, ResearchRequest
 from shared.x402_client import (
@@ -61,8 +62,14 @@ def research_endpoint(
     seller: AgentRecord = repository.get_agent(request.seller_agent_id)
     if seller.role != "seller":
         raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+    if not is_seller_published(seller):
+        raise HTTPException(status_code=403, detail="Seller agent is not published.")
 
-    offer = get_x402_client().create_offer(seller.wallet.address, seller.id)
+    offer = get_x402_client().create_offer(
+        seller.wallet.address,
+        seller.id,
+        amount_usdc=seller_price_usdc(seller),
+    )
 
     if not payment_signature:
         return JSONResponse(

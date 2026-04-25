@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import uuid
 
-from openai import OpenAI
-
 from buyer_agent.state import BuyerState
 from buyer_agent.utils import extract_json
-from shared.config import get_settings
+from shared.llm_client import BuyerLlmNotConfigured, get_buyer_openai_client
 
 
 def decompose_goal(state: BuyerState) -> dict:
@@ -25,12 +23,13 @@ def decompose_goal(state: BuyerState) -> dict:
 
     print(f"  📋 decompose_goal: '{query[:50]}'")
 
-    settings = get_settings()
-    if not settings.live_llm_enabled:
+    try:
+        client, llm_config = get_buyer_openai_client(state.get("buyer_agent_llm_config"))
+    except BuyerLlmNotConfigured as exc:
         raise RuntimeError(
             "LLM-based goal decomposition is required but not configured. "
-            "Please set FEATHERLESS_API_KEY environment variable."
-        )
+            f"{exc}"
+        ) from exc
 
     system_message = f"You are {agent_name}"
     if agent_description:
@@ -56,14 +55,9 @@ Return ONLY valid JSON:
     ]
 }"""
 
-    client = OpenAI(
-        api_key=settings.featherless_api_key.get_secret_value(),
-        base_url=settings.featherless_base_url,
-    )
-
     try:
         completion = client.chat.completions.create(
-            model=settings.orchestrator_model,
+            model=llm_config["model"],
             messages=[
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": f"Goal: {query}\n\nDecompose this into tasks."},

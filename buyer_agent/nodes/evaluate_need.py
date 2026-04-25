@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 import re
 
-from openai import OpenAI
-
 from buyer_agent.state import BuyerState
 from buyer_agent.utils import extract_json
-from shared.config import get_settings
+from shared.llm_client import BuyerLlmNotConfigured, get_buyer_openai_client
 
 
 def _extract_json_deprecated(content: str) -> dict:
@@ -75,19 +73,15 @@ def evaluate_research_need(state: BuyerState) -> dict:
     query = state["query"].strip()
     print(f"  🔍 evaluate_research_need: '{query[:50]}'")
 
-    settings = get_settings()
-    if not settings.live_llm_enabled:
+    try:
+        client, llm_config = get_buyer_openai_client(state.get("buyer_agent_llm_config"))
+    except BuyerLlmNotConfigured as exc:
         # If LLM not available, assume research is needed
         return {
             "needs_external_research": True,
             "direct_answer": None,
-            "thinking": "LLM not available, proceeding with seller research",
+            "thinking": f"{exc} Proceeding with seller research.",
         }
-
-    client = OpenAI(
-        api_key=settings.featherless_api_key.get_secret_value(),
-        base_url=settings.featherless_base_url,
-    )
 
     evaluation_prompt = f"""Analyze this query: "{query}"
 
@@ -106,7 +100,7 @@ Return JSON:
 
     try:
         completion = client.chat.completions.create(
-            model=settings.orchestrator_model,
+            model=llm_config["model"],
             messages=[
                 {
                     "role": "system",

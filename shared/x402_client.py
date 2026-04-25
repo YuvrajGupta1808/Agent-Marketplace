@@ -101,10 +101,10 @@ def build_payment_typed_data(
 
 @dataclass(slots=True)
 class CirclePaymentClient:
-    def create_offer(self, seller_wallet_address: str, seller_agent_id: str) -> PaymentOffer:
+    def create_offer(self, seller_wallet_address: str, seller_agent_id: str, amount_usdc: str | None = None) -> PaymentOffer:
         settings = get_settings()
         return PaymentOffer(
-            amount_usdc=format_usdc_amount(settings.seller_price_usdc),
+            amount_usdc=amount_usdc or format_usdc_amount(settings.seller_price_usdc),
             chain_id=settings.arc_chain_id,
             pay_to=seller_wallet_address,
             seller_agent_id=seller_agent_id,

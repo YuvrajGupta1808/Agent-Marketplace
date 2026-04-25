@@ -1,42 +1,23 @@
 from __future__ import annotations
 
 from seller_agent.state import SellerState
+from shared.builtin_tools import run_builtin_tools
 
 
 def retrieve_context(state: SellerState) -> dict:
-    import httpx
-
     query = state["query"]
+    tool_ids = state.get("seller_tool_ids", [])
 
-    try:
-        response = httpx.get(
-            "https://api.duckduckgo.com/",
-            params={
-                "q": query,
-                "format": "json",
-                "no_redirect": 1,
-                "no_html": 1,
-            },
-            timeout=5,
-        )
-        data = response.json()
-
-        context_text = ""
-        # Parse DuckDuckGo results
-        if data.get("AbstractText"):
-            context_text += f"{data.get('AbstractTitle', query)}: {data.get('AbstractText', '')}\n\n"
-
-        # Add related searches
-        if data.get("RelatedTopics"):
-            for item in data.get("RelatedTopics", [])[:3]:
-                if isinstance(item, dict) and "Text" in item:
-                    context_text += f"{item.get('Text', '')}\n"
-
+    if not tool_ids:
         return {
-            "retrieval_context": context_text if context_text else f"No search results found for: {query}",
-        }
-    except Exception:
-        return {
-            "retrieval_context": f"Unable to search for: {query}"
+            "retrieval_context": "",
+            "tool_outputs": [],
+            "citations": [],
         }
 
+    result = run_builtin_tools(tool_ids, query)
+    return {
+        "retrieval_context": result.context,
+        "tool_outputs": result.tool_outputs,
+        "citations": result.citations,
+    }

@@ -77,32 +77,46 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
             node_state = state
 
         input_state = dict(node_state)
+        event_task_id = node_state.get("task_id", task_id)
         start_time = time.time()
 
         if writer:
             writer({
                 "event_type": "node_start",
-                "task_id": task_id,
+                "task_id": event_task_id,
                 "node": node_name,
                 "title": title,
-                "query": query,
+                "query": node_state.get("query", query),
             })
 
-        output = node_fn(node_state)
+        try:
+            output = node_fn(node_state) or {}
+        except Exception as exc:
+            output = {"error": f"{type(exc).__name__}: {exc}"}
         duration_ms = int((time.time() - start_time) * 1000)
 
         thinking = output.get("thinking", "")
         status = "done" if not output.get("error") else "error"
 
         if writer:
-            writer({
+            complete_event = {
                 "event_type": "node_complete",
-                "task_id": task_id,
+                "task_id": event_task_id,
                 "node": node_name,
                 "title": title,
                 "status": status,
                 "duration_ms": duration_ms,
-            })
+            }
+            if output.get("error"):
+                complete_event["error"] = output["error"]
+            if output.get("payment_receipt"):
+                complete_event["payment_details"] = output["payment_receipt"]
+            if output.get("result"):
+                complete_event["research_result"] = output["result"]
+            writer(complete_event)
+
+        state_after = dict(node_state)
+        state_after.update(output)
 
         trace.append(
             GraphNodeOutput(
@@ -114,7 +128,7 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
                 reasoning=thinking,
                 input_state=_snapshot(input_state),
                 output=_snapshot(output),
-                state_after=_snapshot(dict(node_state)),
+                state_after=_snapshot(state_after),
             )
         )
 
@@ -122,12 +136,24 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
             if writer:
                 writer({
                     "event_type": "error",
-                    "task_id": task_id,
+                    "task_id": event_task_id,
                     "node": node_name,
                     "error": output.get("error"),
                 })
 
         return output
+
+    def _record_task_error(task_errors: list[dict[str, Any]], task_state: BuyerState, node_name: str, title: str, output: dict) -> None:
+        message = str(output.get("error") or "Unknown task error")
+        task_errors.append(
+            {
+                "task_id": task_state.get("task_id", "unknown"),
+                "query": task_state.get("query", ""),
+                "node": node_name,
+                "title": title,
+                "message": message,
+            }
+        )
 
     # Step 1: Validate scope
     output = _run_node("validate_scope", "Validate Scope", "routing", validate_scope)
@@ -136,6 +162,7 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
     if not state.get("within_scope", True):
         # Out of scope - build rejection result and return
         state["result"] = _build_rejection_result(state)
+        state["final_answer"] = state.get("scope_rejection_reason") or state["result"]["summary"]
         return state, trace
 
     # Step 2: Decompose goal into tasks
@@ -144,31 +171,43 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
 
     tasks = state.get("tasks", [])
     task_results = []
+    task_errors: list[dict[str, Any]] = []
 
     # Step 3: Execute each task
     for task_idx, task in enumerate(tasks, 1):
         task_state = {**state, "task_id": task.get("task_id", f"task-{task_idx}"), "query": task.get("query", "")}
 
-        # 3a. Discover seller (from connected_seller_ids)
-        output = _run_node(f"discover_seller_{task_idx}", f"Discover Seller (Task {task_idx})", "planning", discover_seller, task_state)
-        task_state.update(output)
+        task_steps = [
+            ("discover_seller", f"Discover Seller (Task {task_idx})", "planning", discover_seller),
+            ("execute_payment", f"Execute Payment (Task {task_idx})", "execute", execute_payment),
+            ("send_research", f"Send Research (Task {task_idx})", "execute", send_research_request),
+            ("fetch_result", f"Fetch Result (Task {task_idx})", "execute", fetch_result),
+        ]
 
-        # 3b. Execute payment
-        output = _run_node(f"execute_payment_{task_idx}", f"Execute Payment (Task {task_idx})", "execute", execute_payment, task_state)
-        task_state.update(output)
+        task_failed = False
+        for base_node_name, title, phase, node_fn in task_steps:
+            node_name = f"{base_node_name}_{task_idx}"
+            output = _run_node(node_name, title, phase, node_fn, task_state)
+            task_state.update(output)
 
-        # 3c. Send research request
-        output = _run_node(f"send_research_{task_idx}", f"Send Research (Task {task_idx})", "execute", send_research_request, task_state)
-        task_state.update(output)
+            if output.get("error"):
+                _record_task_error(task_errors, task_state, node_name, title, output)
+                task_failed = True
+                break
 
-        # 3d. Fetch result
-        output = _run_node(f"fetch_result_{task_idx}", f"Fetch Result (Task {task_idx})", "execute", fetch_result, task_state)
-        task_state.update(output)
+        if task_failed:
+            continue
 
         if task_state.get("result"):
             task_results.append(task_state["result"])
 
     state["task_results"] = task_results
+    if task_errors:
+        state["task_errors"] = task_errors
+
+    if task_errors and not task_results:
+        state["error"] = task_errors[0]["message"]
+        return state, trace
 
     # Step 4: Synthesize results
     output = _run_node("synthesize_results", "Synthesize Results", "synthesis", synthesize_results)

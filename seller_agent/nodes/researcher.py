@@ -61,13 +61,26 @@ def _live_research(state: SellerState) -> str:
 
     context = state.get("retrieval_context", "")
     context_section = f"Search Results:\n{context}\n\n" if context else ""
+    seller_name = state.get("seller_name") or "Seller Agent"
+    seller_description = state.get("seller_description") or ""
+    seller_system_prompt = state.get("seller_system_prompt") or ""
+
+    system_content = f"You are {seller_name}, a seller agent in an autonomous agent marketplace.\n"
+    if seller_description:
+        system_content += f"Use case: {seller_description}\n"
+    if seller_system_prompt:
+        system_content += f"System instructions: {seller_system_prompt}\n"
+    system_content += (
+        "Answer the buyer's task using the provided tool context when available. "
+        "Be concise, useful, and avoid mentioning internal payment or marketplace mechanics."
+    )
 
     completion = client.chat.completions.create(
         model=settings.seller_model,
         messages=[
             {
                 "role": "system",
-                "content": "You are a research analyst. Provide a clear, informative response to the user's query based on the search results. Write naturally without any JSON or special formatting.",
+                "content": system_content,
             },
             {
                 "role": "user",
@@ -104,6 +117,8 @@ def run_research(state: SellerState) -> dict:
     except Exception as e:
         print(f"  ❌ Research generation failed: {type(e).__name__}: {str(e)[:100]}")
         # Fallback: return minimal valid response
+        context = state.get("retrieval_context", "")
+        fallback = context if context else f"Analysis of: {state['query']} - Research completed."
         return {
-            "research_output": f"Analysis of: {state['query']} - Research completed.",
+            "research_output": fallback,
         }
