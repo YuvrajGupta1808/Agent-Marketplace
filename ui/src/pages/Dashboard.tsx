@@ -57,7 +57,11 @@ export function Dashboard() {
 
             <Panel defaultSize={65} minSize={45} className="min-h-0 min-w-0">
               <div className="h-full min-h-0 w-full overflow-hidden bg-white">
-                <TransactionHistory ref={transactionHistoryRef} latestRun={latestRun} />
+                <TransactionHistory
+                  ref={transactionHistoryRef}
+                  latestRun={latestRun}
+                  buyerAgentId={currentBuyer?.id ?? null}
+                />
               </div>
             </Panel>
           </PanelGroup>
