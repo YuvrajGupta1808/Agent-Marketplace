@@ -18,7 +18,7 @@ export function Builder() {
   const [prompt, setPrompt] = useState("");
   const [category, setCategory] = useState(getDefaultSellerCategory());
   const [priceUsdc, setPriceUsdc] = useState("0.010000");
-  const [selectedTools, setSelectedTools] = useState<string[]>(["web_search"]);
+  const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [toolOptions, setToolOptions] = useState<BuiltInTool[]>([]);
   const [llmProviders, setLlmProviders] = useState<LlmProviderOption[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState("aimlapi");
@@ -64,10 +64,6 @@ export function Builder() {
       .then((tools) => {
         if (cancelled) return;
         setToolOptions(tools);
-        const webSearch = tools.find((tool) => tool.id === "web_search" && tool.enabled);
-        if (webSearch && selectedTools.length === 0) {
-          setSelectedTools(["web_search"]);
-        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -117,22 +113,6 @@ export function Builder() {
       }
     }
   }, [selectedModel, selectedProvider]);
-
-  useEffect(() => {
-    if (toolOptions.length === 0) return;
-
-    const allowedToolIds = new Set(
-      toolOptions.filter((tool) => getToolCategory(tool.id) === category).map((tool) => tool.id),
-    );
-    const defaultToolForCategory =
-      toolOptions.find((tool) => getToolCategory(tool.id) === category && tool.enabled)?.id ?? null;
-
-    setSelectedTools((current) => {
-      const filtered = current.filter((toolId) => allowedToolIds.has(toolId));
-      if (filtered.length > 0) return filtered;
-      return defaultToolForCategory ? [defaultToolForCategory] : [];
-    });
-  }, [category, toolOptions]);
 
   const toggleAgent = (id: string) => {
     setSelectedAgents((prev) =>
@@ -480,6 +460,9 @@ export function Builder() {
                 <Wrench size={16} />
                 <h3 className="text-sm font-black uppercase tracking-[0.1em] text-black">Built-In Tools</h3>
               </div>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+                Selected tools: {selectedTools.length}
+              </p>
               <p className="mb-3 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">{category}</p>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {visibleCategoryTools.map((tool) => {
