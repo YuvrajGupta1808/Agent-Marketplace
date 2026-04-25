@@ -11,6 +11,7 @@ import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { ReactFlowInstance } from '@xyflow/react';
 import type { AgentRecord, RunResponse } from '../../lib/api';
+import { isSellerPublished } from '../../lib/seller';
 
 function buildGraph(
   buyer: AgentRecord | null,
@@ -25,7 +26,7 @@ function buildGraph(
   const connectedSellerIds = Array.isArray(buyer.metadata.connected_seller_ids)
     ? (buyer.metadata.connected_seller_ids as string[])
     : sellerAgents.map((seller) => seller.id);
-  const connectedSellers = sellerAgents.filter((seller) => connectedSellerIds.includes(seller.id));
+  const connectedSellers = sellerAgents.filter((seller) => isSellerPublished(seller) && connectedSellerIds.includes(seller.id));
 
   const nodes = [
     {

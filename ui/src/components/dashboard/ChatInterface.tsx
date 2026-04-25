@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { streamMarketplace } from "../../lib/api";
 import type { AgentRecord, RunResponse, StreamEvent } from "../../lib/api";
+import { isSellerPublished } from "../../lib/seller";
 import type { TransactionHistoryRef } from "./TransactionHistory";
 import { ThinkingNode } from "./ThinkingNode";
 
@@ -23,9 +24,12 @@ interface Message {
   role: "user" | "agent";
   content: string;
   id: string;
+  status?: "normal" | "error";
 }
 
 function getDisplayAnswer(result: RunResponse): string {
+  if (result.error?.trim()) return result.error.trim();
+
   const primary = [result.final_answer, result.running_answer]
     .find((value) => typeof value === "string" && value.trim().length > 0)
     ?.trim();
@@ -101,7 +105,10 @@ export function ChatInterface({
   const connectedSellerIds = Array.isArray(buyer?.metadata.connected_seller_ids)
     ? (buyer?.metadata.connected_seller_ids as string[])
     : sellerAgents.map((seller) => seller.id);
-  const availableSellers = sellerAgents.filter((seller) => connectedSellerIds.includes(seller.id));
+  const availableSellers = sellerAgents.filter((seller) => isSellerPublished(seller) && connectedSellerIds.includes(seller.id));
+  const selectedSellerIsAvailable = Boolean(
+    selectedSellerId && availableSellers.some((seller) => seller.id === selectedSellerId),
+  );
 
   useEffect(() => {
     setMessages([{ role: "agent", content: getBuyerUseCaseMessage(buyer), id: "init" }]);
@@ -121,8 +128,8 @@ export function ChatInterface({
       setMessages((prev) => [...prev, { role: "agent", content: "Circle is not configured on the backend, so real wallet execution is blocked.", id: `msg-${Date.now()}` }]);
       return;
     }
-    if (!selectedSellerId) {
-      setMessages((prev) => [...prev, { role: "agent", content: "Select a seller agent before running the workflow.", id: `msg-${Date.now()}` }]);
+    if (!selectedSellerIsAvailable || !selectedSellerId) {
+      setMessages((prev) => [...prev, { role: "agent", content: "Select a published seller agent before running the workflow.", id: `msg-${Date.now()}` }]);
       return;
     }
 
@@ -139,6 +146,7 @@ export function ChatInterface({
     try {
       const events: StreamEvent[] = [];
       let answer = "";
+      let streamError = "";
 
       for await (const event of streamMarketplace({
         userGoal: goal,
@@ -151,6 +159,15 @@ export function ChatInterface({
         // Capture final answer from stream
         if (event.type === "final_answer") {
           answer = event.answer || "";
+        }
+        if (event.type === "error") {
+          streamError = event.error || "Workflow failed.";
+        }
+        if (event.type === "custom_event" && event.data?.event_type === "error") {
+          const eventError = event.data.error;
+          if (typeof eventError === "string" && eventError.trim()) {
+            streamError = eventError.trim();
+          }
         }
 
         // Handle real-time transaction creation
@@ -172,12 +189,16 @@ export function ChatInterface({
       }
 
       // Add the final answer to messages (use actual answer from backend)
-      const finalAnswer = answer || "Research completed successfully.";
-      setMessages(prev => [...prev, { role: "agent", content: finalAnswer, id: answerMsgId }]);
+      if (streamError) {
+        setMessages(prev => [...prev, { role: "agent", content: streamError, id: answerMsgId, status: "error" }]);
+      } else {
+        const finalAnswer = answer || "Workflow completed, but no final answer was produced.";
+        setMessages(prev => [...prev, { role: "agent", content: finalAnswer, id: answerMsgId }]);
+      }
       // Keep streamEvents for persistent thinking section display
     } catch (error) {
       const message = error instanceof Error ? error.message : "Workflow failed.";
-      setMessages(prev => [...prev, { role: "agent", content: `❌ Error: ${message}`, id: answerMsgId }]);
+      setMessages(prev => [...prev, { role: "agent", content: message, id: answerMsgId, status: "error" }]);
       // Keep streamEvents even on error for debugging
     } finally {
       setIsSubmitting(false);
@@ -218,7 +239,7 @@ export function ChatInterface({
         {messages.map((msg) => (
           <div key={msg.id} className={`flex w-full flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
             {/* Main Message */}
-            <div className={`p-4 rounded-none text-xs font-semibold max-w-[85%] border-2 leading-relaxed whitespace-pre-wrap wrap-break-word shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${msg.role === "user" ? "bg-black text-white border-black" : "bg-white text-gray-800 border-black"}`}>
+            <div className={`p-4 rounded-none text-xs font-semibold max-w-[85%] border-2 leading-relaxed whitespace-pre-wrap wrap-break-word shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${msg.role === "user" ? "bg-black text-white border-black" : msg.status === "error" ? "bg-red-50 text-red-800 border-red-600" : "bg-white text-gray-800 border-black"}`}>
               {msg.role === "user" ? (
                 msg.content
               ) : (

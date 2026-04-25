@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAppState } from "../lib/app-state";
-import { testResearch, TestResearchResult } from "../lib/api";
+import type { BuiltInTool } from "../lib/api";
+import { listSellerTools, testResearch, TestResearchResult } from "../lib/api";
 import { AlertCircle, Loader2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { formatToolNames, getSellerPrice, getSellerStatus, getSellerToolIds } from "../lib/seller";
 
 function normalizeMarkdown(text: string) {
   if (!text) return "";
@@ -20,26 +22,53 @@ function normalizeMarkdown(text: string) {
 }
 
 export function SellerTest() {
-  const { currentUser, sellerAgents, isReady } = useAppState();
+  const { currentUser, sellerAgents, isReady, selectedSellerId, setSelectedSellerId, setSellerStatus } = useAppState();
   const [query, setQuery] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
   const [result, setResult] = useState<TestResearchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [toolOptions, setToolOptions] = useState<BuiltInTool[]>([]);
+
+  const ownedSellerAgents = useMemo(
+    () => (currentUser ? sellerAgents.filter((agent) => agent.user_id === currentUser.id) : []),
+    [currentUser, sellerAgents],
+  );
+  const selectedSeller = ownedSellerAgents.find((agent) => agent.id === selectedAgentId) ?? null;
+  const selectedSellerStatus = selectedSeller ? getSellerStatus(selectedSeller) : "draft";
+
+  useEffect(() => {
+    let cancelled = false;
+    listSellerTools()
+      .then((tools) => {
+        if (!cancelled) setToolOptions(tools);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load seller tools.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!currentUser) {
       setLoadError("Please log in to test seller agents.");
       return;
     }
-    if (sellerAgents.length === 0 && isReady) {
+    if (ownedSellerAgents.length === 0 && isReady) {
       setLoadError("No seller agents available. Please create one first.");
-    } else if (sellerAgents.length > 0 && !selectedAgentId) {
-      setSelectedAgentId(sellerAgents[0].id);
+    } else if (ownedSellerAgents.length > 0 && (!selectedAgentId || !ownedSellerAgents.some((agent) => agent.id === selectedAgentId))) {
+      const nextSellerId =
+        (selectedSellerId && ownedSellerAgents.some((agent) => agent.id === selectedSellerId) && selectedSellerId) ||
+        ownedSellerAgents[0].id;
+      setSelectedAgentId(nextSellerId);
+      setSelectedSellerId(nextSellerId);
       setLoadError(null);
     }
-  }, [currentUser, sellerAgents, selectedAgentId, isReady]);
+  }, [currentUser, ownedSellerAgents, selectedAgentId, selectedSellerId, setSelectedSellerId, isReady]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,19 +92,19 @@ export function SellerTest() {
         user_id: currentUser.id,
       });
 
-      // Simple response: just has "output" text
-      const output = res.output || JSON.stringify(res);
+      const resultPayload = res.result as Partial<TestResearchResult> | undefined;
+      const output = resultPayload?.summary || res.output || JSON.stringify(res);
 
       if (!output) {
         throw new Error("No output returned from research");
       }
 
       const normalizedResult: TestResearchResult = {
-        task_id: res.task_id || "test-task",
-        title: `Research: ${query.trim().slice(0, 50)}`,
+        task_id: resultPayload?.task_id || res.task_id || "test-task",
+        title: resultPayload?.title || `Research: ${query.trim().slice(0, 50)}`,
         summary: output,
-        bullets: [],
-        citations: [],
+        bullets: resultPayload?.bullets || [],
+        citations: resultPayload?.citations || [],
       };
 
       setResult(normalizedResult);
@@ -84,6 +113,19 @@ export function SellerTest() {
       setError(err instanceof Error ? err.message : "Research failed");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!selectedSeller) return;
+    setError(null);
+    setIsPublishing(true);
+    try {
+      await setSellerStatus(selectedSeller.id, "published");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to publish seller agent.");
+    } finally {
+      setIsPublishing(false);
     }
   };
 
@@ -137,13 +179,17 @@ export function SellerTest() {
                   ) : (
                     <select
                       value={selectedAgentId}
-                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedAgentId(e.target.value);
+                        setSelectedSellerId(e.target.value);
+                        setResult(null);
+                      }}
                       className="w-full border-2 border-black py-3 px-4 text-xs font-bold uppercase tracking-widest outline-none focus:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
                     >
-                      {sellerAgents.length === 0 ? (
+                      {ownedSellerAgents.length === 0 ? (
                         <option disabled>No agents available</option>
                       ) : (
-                        sellerAgents.map((agent) => (
+                        ownedSellerAgents.map((agent) => (
                           <option key={agent.id} value={agent.id}>
                             {agent.name}
                           </option>
@@ -152,6 +198,14 @@ export function SellerTest() {
                     </select>
                   )}
                 </div>
+
+                {selectedSeller ? (
+                  <div className="grid grid-cols-1 gap-3 border-2 border-black bg-gray-50 p-4 text-[10px] font-black uppercase tracking-[0.16em] text-black sm:grid-cols-3">
+                    <div>Status: {selectedSellerStatus}</div>
+                    <div>Price: {getSellerPrice(selectedSeller)} USDC</div>
+                    <div>Tools: {formatToolNames(getSellerToolIds(selectedSeller), toolOptions)}</div>
+                  </div>
+                ) : null}
 
                 <button
                   type="submit"
@@ -167,6 +221,16 @@ export function SellerTest() {
                     "RUN RESEARCH"
                   )}
                 </button>
+                {result && selectedSellerStatus === "draft" ? (
+                  <button
+                    type="button"
+                    onClick={handlePublish}
+                    disabled={isPublishing}
+                    className="border-2 border-black bg-white py-4 text-[10px] font-black uppercase tracking-[0.2em] text-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isPublishing ? "PUBLISHING..." : "PUBLISH SELLER"}
+                  </button>
+                ) : null}
               </form>
             </div>
           )}
