@@ -5,6 +5,7 @@ import { getTransactions, pollPendingTransactions } from "../../lib/api";
 
 interface TransactionHistoryProps {
   latestRun: RunResponse | null;
+  buyerAgentId: string | null;
 }
 
 export interface TransactionHistoryRef {
@@ -36,7 +37,7 @@ function formatFallbackTaskName(taskId: string): string {
 }
 
 export const TransactionHistory = forwardRef<TransactionHistoryRef, TransactionHistoryProps>(
-  ({ latestRun }, ref) => {
+  ({ latestRun, buyerAgentId }, ref) => {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -93,11 +94,16 @@ export const TransactionHistory = forwardRef<TransactionHistoryRef, TransactionH
       return labels;
     }, [latestRun]);
 
-    const fetchTransactions = async () => {
+    const fetchTransactions = async (options?: { showLoading?: boolean }) => {
+      const shouldShowLoading = options?.showLoading ?? true;
       try {
-        setIsLoading(true);
+        if (shouldShowLoading) {
+          setIsLoading(true);
+        }
         setError(null);
-        const response = await getTransactions();
+        const response = await getTransactions(
+          buyerAgentId ? { buyerAgentId } : undefined,
+        );
         setTransactions(response.transactions || []);
         console.log(`Loaded ${response.transactions?.length || 0} transactions from database`);
       } catch (err) {
@@ -106,11 +112,19 @@ export const TransactionHistory = forwardRef<TransactionHistoryRef, TransactionH
         console.error("Error fetching transactions:", errMsg);
         setTransactions([]);
       } finally {
-        setIsLoading(false);
+        if (shouldShowLoading) {
+          setIsLoading(false);
+        }
       }
     };
 
     useEffect(() => {
+      if (!buyerAgentId) {
+        setTransactions([]);
+        setIsLoading(false);
+        return;
+      }
+
       fetchTransactions();
 
       const refreshInterval = setInterval(fetchTransactions, 5000);
@@ -131,14 +145,14 @@ export const TransactionHistory = forwardRef<TransactionHistoryRef, TransactionH
         clearInterval(refreshInterval);
         clearInterval(pollInterval);
       };
-    }, []);
+    }, [buyerAgentId]);
 
     useEffect(() => {
-      if (latestRun) {
+      if (latestRun && buyerAgentId) {
         console.log("New run detected, refreshing transactions...");
-        fetchTransactions();
+        fetchTransactions({ showLoading: false });
       }
-    }, [latestRun?.thread_id]);
+    }, [latestRun?.thread_id, buyerAgentId]);
 
     const handleRefresh = async () => {
       setRefreshing(true);
@@ -276,7 +290,7 @@ export const TransactionHistory = forwardRef<TransactionHistoryRef, TransactionH
                               title={`View on Arc: ${tx.tx_hash}`}
                             >
                               <span className="truncate">{txHashShort}</span>
-                              <ExternalLink size={12} className="flex-shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                              <ExternalLink size={12} className="shrink-0 group-hover:translate-x-0.5 transition-transform" />
                             </a>
                             <p className="text-[8px] font-bold text-green-700">CONFIRMED</p>
                           </>

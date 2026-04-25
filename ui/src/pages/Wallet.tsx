@@ -12,11 +12,19 @@ function shorten(value: string, start = 10, end = 8) {
 }
 
 export function Wallet() {
-  const { currentBuyer, latestRun, health } = useAppState();
+  const { buyerAgents, currentBuyer, latestRun, health, selectBuyerAgent } = useAppState();
   const [copied, setCopied] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
   const [polling, setPolling] = useState(false);
+
+  const scopedFetchTransactions = async (buyerId: string) => {
+    const response = await getTransactions({ buyerAgentId: buyerId });
+    // Show all transactions that have been processed (INITIATED, CONFIRMED, or COMPLETE)
+    return (response.transactions || []).filter(
+      (tx) => tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED",
+    );
+  };
 
   // Real-time payment snapshot from transactions instead of latestRun
   const paymentTotal = useMemo(
@@ -31,14 +39,15 @@ export function Wallet() {
 
   useEffect(() => {
     const fetchTransactions = async () => {
+      if (!currentBuyer) {
+        setTransactions([]);
+        setIsLoadingTransactions(false);
+        return;
+      }
       try {
         setIsLoadingTransactions(true);
-        const response = await getTransactions();
-        // Show all transactions that have been processed (INITIATED, CONFIRMED, or COMPLETE)
-        const confirmed = (response.transactions || []).filter(tx =>
-          tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED"
-        );
-        setTransactions(confirmed);
+        const scopedTransactions = await scopedFetchTransactions(currentBuyer.id);
+        setTransactions(scopedTransactions);
       } catch (err) {
         console.error("Error fetching transactions:", err);
         setTransactions([]);
@@ -52,25 +61,22 @@ export function Wallet() {
     // Auto-refresh every 5 seconds to catch confirmed transactions
     const interval = setInterval(fetchTransactions, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [currentBuyer?.id]);
 
   // Refresh transactions when latestRun changes
   useEffect(() => {
-    if (latestRun?.thread_id) {
+    if (latestRun?.thread_id && currentBuyer) {
       const fetchTransactions = async () => {
         try {
-          const response = await getTransactions();
-          const confirmed = (response.transactions || []).filter(tx =>
-            tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED"
-          );
-          setTransactions(confirmed);
+          const scopedTransactions = await scopedFetchTransactions(currentBuyer.id);
+          setTransactions(scopedTransactions);
         } catch (err) {
           console.error("Error fetching transactions:", err);
         }
       };
       fetchTransactions();
     }
-  }, [latestRun?.thread_id]);
+  }, [latestRun?.thread_id, currentBuyer?.id]);
 
   const handleCopyAddress = async () => {
     if (!currentBuyer?.wallet.address) return;
@@ -84,16 +90,14 @@ export function Wallet() {
   };
 
   const handlePollCircle = async () => {
+    if (!currentBuyer) return;
     setPolling(true);
     try {
       const result = await pollPendingTransactions();
       console.log(`📡 Polled Circle: ${result.updated} updated, ${result.total_pending} still pending`);
       // Refresh transactions after polling
-      const response = await getTransactions();
-      const confirmed = (response.transactions || []).filter(tx =>
-        tx.state === "COMPLETE" || tx.state === "CONFIRMED" || tx.state === "INITIATED"
-      );
-      setTransactions(confirmed);
+      const scopedTransactions = await scopedFetchTransactions(currentBuyer.id);
+      setTransactions(scopedTransactions);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to poll Circle";
       console.error("Poll failed:", msg);
@@ -137,6 +141,22 @@ export function Wallet() {
           <p className="mt-3 max-w-3xl text-xs font-bold uppercase tracking-widest text-gray-500">
             Fund the buyer wallet externally, then use this page to verify the destination address, track payment activity, and inspect the Circle wallet identifiers.
           </p>
+          <div className="mt-4">
+            {buyerAgents.length > 0 ? (
+              <select
+                aria-label="Select buyer wallet"
+                value={currentBuyer.id}
+                onChange={(event) => selectBuyerAgent(event.target.value)}
+                className="max-w-[320px] border-2 border-black bg-white px-3 py-2 text-[10px] font-black uppercase tracking-[0.16em] text-black outline-none"
+              >
+                {buyerAgents.map((buyerAgent) => (
+                  <option key={buyerAgent.id} value={buyerAgent.id}>
+                    {buyerAgent.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
         </div>
         <div className="border-2 border-black bg-black px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
           {health?.circle_enabled ? "Circle Backend Active" : "Circle Backend Not Ready"}
@@ -335,7 +355,7 @@ export function Wallet() {
                               title={`View on Arc: ${tx.tx_hash}`}
                             >
                               <span className="truncate">{txHashShort}</span>
-                              <ExternalLink size={12} className="flex-shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                              <ExternalLink size={12} className="shrink-0 group-hover:translate-x-0.5 transition-transform" />
                             </a>
                             <p className="text-[8px] font-bold text-green-700">CONFIRMED</p>
                           </>
