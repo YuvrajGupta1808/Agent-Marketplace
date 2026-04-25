@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 import json
 import os
+import uuid
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,8 +93,13 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
 
     settings = get_settings()
     endpoint_url = request.endpoint_url
+    pre_generated_agent_id = str(uuid.uuid4())
     if request.role == "seller" and not endpoint_url:
-        endpoint_url = f"{settings.seller_base_url}{settings.seller_research_path}"
+        endpoint_url = (
+            f"{settings.seller_base_url}"
+            f"{settings.seller_research_path}"
+            f"/{pre_generated_agent_id}"
+        )
 
     if not settings.circle_enabled:
         raise HTTPException(
@@ -146,7 +152,7 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
             status="draft",
         )
     final_request = request.model_copy(update={"endpoint_url": endpoint_url, "metadata": enriched_metadata})
-    agent = repository.create_agent(final_request, wallet)
+    agent = repository.create_agent(final_request, wallet, agent_id=pre_generated_agent_id if request.role == "seller" else None)
     return CreateAgentResponse(agent=agent)
 
 

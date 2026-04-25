@@ -111,8 +111,9 @@ class MarketplaceRepository:
         self,
         request: CreateAgentRequest,
         wallet: Any,
+        agent_id: str | None = None,
     ) -> AgentRecord:
-        agent_id = str(uuid.uuid4())
+        agent_id = agent_id or str(uuid.uuid4())
         wallet_id = str(uuid.uuid4())
         created_at = utc_now()
         metadata_json = json.dumps(request.metadata, sort_keys=True)

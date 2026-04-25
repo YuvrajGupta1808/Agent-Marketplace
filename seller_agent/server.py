@@ -140,3 +140,72 @@ def research_test_endpoint(request: TestResearchRequest):
         }
     )
     return JSONResponse(content=graph_result)
+
+
+@app.post("/research/{seller_id}")
+def research_by_seller_id(
+    seller_id: str,
+    request: ResearchRequest,
+    payment_signature: str | None = Header(default=None, alias=PAYMENT_SIGNATURE_HEADER),
+    payment_tx_id: str | None = Header(default=None, alias=PAYMENT_TX_ID_HEADER),
+):
+    """Per-seller endpoint: seller identity from URL path takes precedence."""
+    seller: AgentRecord = repository.get_agent(seller_id)
+    if seller.role != "seller":
+        raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+    if not is_seller_published(seller):
+        raise HTTPException(status_code=403, detail="Seller agent is not published.")
+
+    offer = get_x402_client().create_offer(
+        seller.wallet.address,
+        seller.id,
+        amount_usdc=seller_price_usdc(seller),
+    )
+
+    if not payment_signature:
+        return JSONResponse(
+            status_code=402,
+            content={"detail": "Payment required."},
+            headers={PAYMENT_REQUIRED_HEADER: offer.model_dump_json()},
+        )
+
+    try:
+        authorization = get_x402_client().verify_authorization(payment_signature, offer, request.query)
+    except ValueError as exc:
+        raise HTTPException(status_code=402, detail=str(exc)) from exc
+
+    if authorization.buyer_agent_id != request.buyer_agent_id:
+        raise HTTPException(status_code=402, detail="Buyer agent does not match payment authorization.")
+    if not payment_tx_id:
+        raise HTTPException(status_code=402, detail="Missing Circle transaction id.")
+    if not get_settings().circle_enabled:
+        raise HTTPException(status_code=400, detail="Circle credentials are required for seller payments.")
+
+    transaction = get_circle_client().get_transaction(payment_tx_id)
+
+    destination = (transaction.get("destination_address") or transaction.get("destinationAddress") or "").lower()
+    amounts = transaction.get("amounts") or []
+    if destination and destination != seller.wallet.address.lower():
+        raise HTTPException(status_code=402, detail="Circle transaction destination does not match seller wallet.")
+    if amounts and Decimal(str(amounts[0])) != Decimal(offer.amount_usdc):
+        raise HTTPException(status_code=402, detail="Circle transaction amount does not match payment offer.")
+
+    receipt = PaymentReceipt(
+        transaction_id=payment_tx_id,
+        transaction_state=transaction.get("state", "UNKNOWN"),
+        tx_hash=transaction.get("tx_hash") or transaction.get("txHash"),
+        amount_usdc=offer.amount_usdc,
+        pay_to=seller.wallet.address,
+    )
+
+    graph_result = seller_graph.invoke(
+        {
+            "task_id": request.task_id,
+            "query": request.query,
+            "seller_agent_id": seller_id,
+        }
+    )
+    return JSONResponse(
+        content=graph_result,
+        headers={PAYMENT_RESPONSE_HEADER: receipt.model_dump_json()},
+    )
