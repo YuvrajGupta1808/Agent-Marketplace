@@ -81,7 +81,7 @@ def get_user(user_id: str) -> dict:
 @app.post("/agents", response_model=CreateAgentResponse)
 def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
     try:
-        repository.get_user(request.user_id)
+        user = repository.get_user(request.user_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -110,7 +110,9 @@ def create_agent(request: CreateAgentRequest) -> CreateAgentResponse:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Wallet provisioning failed: {type(exc).__name__}: {str(exc)}") from exc
 
-    agent = repository.create_agent(request.model_copy(update={"endpoint_url": endpoint_url}), wallet)
+    enriched_metadata = {"creator_name": user.display_name, **request.metadata}
+    final_request = request.model_copy(update={"endpoint_url": endpoint_url, "metadata": enriched_metadata})
+    agent = repository.create_agent(final_request, wallet)
     return CreateAgentResponse(agent=agent)
 
 
@@ -179,23 +181,30 @@ def health_check() -> dict:
 
 @app.post("/run", response_model=RunResponse)
 def run_marketplace(request: RunRequest) -> RunResponse:
-    # Validate agents exist
+    # Validate buyer agent exists (seller_agent_id is now optional)
     try:
         buyer = repository.get_agent(request.buyer_agent_id)
-        seller = repository.get_agent(request.seller_agent_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
+        raise HTTPException(status_code=404, detail=f"Buyer agent not found: {exc}") from exc
 
     if buyer.role != "buyer":
         raise HTTPException(status_code=400, detail="buyer_agent_id must reference a buyer agent.")
-    if seller.role != "seller":
-        raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+
+    # Validate seller_agent_id if provided (for backwards compatibility)
+    if request.seller_agent_id:
+        try:
+            seller = repository.get_agent(request.seller_agent_id)
+            if seller.role != "seller":
+                raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Seller agent not found: {exc}") from exc
 
     try:
         print(f"\n🚀 Starting orchestrator with:")
         print(f"   Goal: {request.user_goal}")
         print(f"   Buyer: {request.buyer_agent_id}")
-        print(f"   Seller: {request.seller_agent_id}")
+        if request.seller_agent_id:
+            print(f"   Seller: {request.seller_agent_id}")
         print(f"   Thread: {request.thread_id}\n")
 
         result = orchestrator_graph.invoke(
@@ -271,14 +280,20 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
     """Stream execution updates in real-time using Server-Sent Events."""
     try:
         buyer = repository.get_agent(request.buyer_agent_id)
-        seller = repository.get_agent(request.seller_agent_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Agent not found: {exc}") from exc
+        raise HTTPException(status_code=404, detail=f"Buyer agent not found: {exc}") from exc
 
     if buyer.role != "buyer":
         raise HTTPException(status_code=400, detail="buyer_agent_id must reference a buyer agent.")
-    if seller.role != "seller":
-        raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+
+    # Validate seller_agent_id if provided (for backwards compatibility)
+    if request.seller_agent_id:
+        try:
+            seller = repository.get_agent(request.seller_agent_id)
+            if seller.role != "seller":
+                raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Seller agent not found: {exc}") from exc
 
     def _make_serializable(obj):
         """Convert non-serializable objects to JSON-safe format."""
@@ -320,7 +335,7 @@ def run_marketplace_stream(request: RunRequest) -> StreamingResponse:
                 if chunk["type"] == "updates":
                     for node_name, state in chunk["data"].items():
                         # Capture final result and accumulate payments/task_specs
-                        if node_name == "synthesize_answer":
+                        if node_name == "synthesize_answer" or state.get("final_answer") or state.get("running_answer"):
                             final_result = state
                             all_payments = state.get("payments", [])
                             all_task_specs = state.get("task_specs", [])

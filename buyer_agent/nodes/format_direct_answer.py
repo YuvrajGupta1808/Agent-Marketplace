@@ -8,6 +8,7 @@ def format_direct_answer(state: BuyerState) -> dict:
     """Format a direct answer as a ResearchResult."""
     direct_answer = state.get("direct_answer", "")
     query = state.get("query", "Query")
+    agent_name = state.get("buyer_agent_name") or "Buyer Agent"
 
     print(f"  📦 format_direct_answer: '{query[:50]}'")
 
@@ -22,7 +23,7 @@ def format_direct_answer(state: BuyerState) -> dict:
         summary=summary,
         bullets=[],
         citations=[],
-        seller_name="Buyer Agent",
+        seller_name=agent_name,
         is_ambiguous=False,
         metadata={},
     )

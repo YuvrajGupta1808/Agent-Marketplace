@@ -87,6 +87,8 @@ class MarketplaceRepository:
                     a.user_id,
                     a.role,
                     a.name,
+                    a.description,
+                    a.system_prompt,
                     a.endpoint_url,
                     a.wallet_id,
                     a.created_at,
@@ -139,14 +141,16 @@ class MarketplaceRepository:
             )
             connection.execute(
                 """
-                INSERT INTO agents (id, user_id, role, name, endpoint_url, wallet_id, created_at, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO agents (id, user_id, role, name, description, system_prompt, endpoint_url, wallet_id, created_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     agent_id,
                     request.user_id,
                     request.role,
                     request.name,
+                    request.description,
+                    request.system_prompt,
                     request.endpoint_url,
                     wallet_id,
                     created_at,
@@ -160,6 +164,8 @@ class MarketplaceRepository:
                     a.user_id,
                     a.role,
                     a.name,
+                    a.description,
+                    a.system_prompt,
                     a.endpoint_url,
                     a.wallet_id,
                     a.created_at,
@@ -187,6 +193,8 @@ class MarketplaceRepository:
                     a.user_id,
                     a.role,
                     a.name,
+                    a.description,
+                    a.system_prompt,
                     a.endpoint_url,
                     a.wallet_id,
                     a.created_at,
@@ -230,6 +238,9 @@ class MarketplaceRepository:
             created_at=payload["created_at"],
             metadata={},
         )
+        # Ensure new fields have default values if missing (backwards compat with old DBs)
+        payload.setdefault("description", "")
+        payload.setdefault("system_prompt", "")
         return AgentRecord(**payload, wallet=wallet, metadata=metadata)
 
     def save_transaction(self, thread_id: str, task_id: str, buyer_agent_id: str, seller_agent_id: str, payment: dict) -> None:

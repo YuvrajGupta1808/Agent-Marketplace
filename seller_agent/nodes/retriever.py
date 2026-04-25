@@ -21,33 +21,22 @@ def retrieve_context(state: SellerState) -> dict:
         )
         data = response.json()
 
-        citations = []
+        context_text = ""
         # Parse DuckDuckGo results
         if data.get("AbstractText"):
-            citations.append({
-                "title": data.get("AbstractTitle", query),
-                "url": data.get("AbstractURL", ""),
-                "snippet": data.get("AbstractText", ""),
-            })
+            context_text += f"{data.get('AbstractTitle', query)}: {data.get('AbstractText', '')}\n\n"
 
         # Add related searches
         if data.get("RelatedTopics"):
             for item in data.get("RelatedTopics", [])[:3]:
                 if isinstance(item, dict) and "Text" in item:
-                    citations.append({
-                        "title": item.get("Text", "").split(" - ")[0],
-                        "url": item.get("FirstURL", ""),
-                        "snippet": item.get("Text", ""),
-                    })
+                    context_text += f"{item.get('Text', '')}\n"
 
         return {
-            "retrieval_context": citations if citations else [],
-            "draft_summary": f"Retrieved context for: {query}"
+            "retrieval_context": context_text if context_text else f"No search results found for: {query}",
         }
     except Exception:
-        # No fallback - return empty if search fails
         return {
-            "retrieval_context": [],
-            "draft_summary": f"No results found for: {query}"
+            "retrieval_context": f"Unable to search for: {query}"
         }
 

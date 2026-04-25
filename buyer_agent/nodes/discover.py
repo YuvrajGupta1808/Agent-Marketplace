@@ -6,9 +6,24 @@ from shared.repository import repository
 
 
 def discover_seller(state: BuyerState) -> dict:
-    print(f"  🔍 discover_seller: seller_agent_id={state['seller_agent_id']}")
     settings = get_settings()
-    seller = repository.get_agent(state["seller_agent_id"])
+
+    # 1. Try connected sellers first
+    connected_ids = state.get("buyer_agent_connected_seller_ids", [])
+    seller_id = None
+
+    if connected_ids:
+        # Use first connected seller (simple routing for now)
+        seller_id = connected_ids[0]
+    else:
+        # Fallback to legacy pre-specified seller_agent_id for backwards compatibility
+        seller_id = state.get("seller_agent_id")
+
+    if not seller_id:
+        raise ValueError("No seller agent available. Connect a seller agent to this buyer.")
+
+    print(f"  🔍 discover_seller: seller_agent_id={seller_id}")
+    seller = repository.get_agent(seller_id)
     if seller.role != "seller":
         raise ValueError(f"Agent {seller.id} is not a seller.")
     seller_url = seller.endpoint_url or f"{settings.seller_base_url}{settings.seller_research_path}"

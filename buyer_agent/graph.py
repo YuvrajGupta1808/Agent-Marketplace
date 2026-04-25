@@ -6,15 +6,15 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from langgraph.config import get_stream_writer
 
+from buyer_agent.nodes.decompose_goal import decompose_goal
 from buyer_agent.nodes.discover import discover_seller
-from buyer_agent.nodes.evaluate_need import evaluate_research_need
 from buyer_agent.nodes.fetch_result import fetch_result
-from buyer_agent.nodes.format_direct_answer import format_direct_answer
 from buyer_agent.nodes.pay import execute_payment
-from buyer_agent.nodes.plan import plan_research_steps
 from buyer_agent.nodes.send_research import send_research_request
+from buyer_agent.nodes.synthesize_results import synthesize_results
+from buyer_agent.nodes.validate_scope import validate_scope
 from buyer_agent.state import BuyerState
-from shared.types import GraphNodeOutput
+from shared.types import GraphNodeOutput, ResearchResult
 
 
 def _snapshot(value: Any) -> Any:
@@ -31,28 +31,52 @@ def _snapshot(value: Any) -> Any:
     return repr(value)
 
 
+def _build_rejection_result(state: BuyerState) -> dict:
+    """Build a rejection result when goal is out of scope."""
+    agent_name = state.get("buyer_agent_name", "Agent")
+    rejection_reason = state.get("scope_rejection_reason", "This goal is outside my capabilities.")
+
+    result = ResearchResult(
+        task_id=state.get("task_id", "scope-rejection"),
+        title=f"{agent_name} — Out of Scope",
+        summary=rejection_reason,
+        bullets=[
+            "Please try a different buyer agent.",
+            "Or add a seller agent that handles this capability.",
+        ],
+        seller_name=agent_name,
+        is_ambiguous=False,
+    )
+    return result.model_dump()
+
+
 def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerState, list[GraphNodeOutput]]:
-    """Run the buyer graph nodes with conditional routing based on research need."""
+    """
+    Run the autonomous buyer agent graph.
+
+    Flow:
+    1. validate_scope - check if goal is within agent's capabilities
+    2. If out of scope - return rejection, else continue
+    3. decompose_goal - break goal into tasks
+    4. For each task: discover_seller → execute_payment → send_research_request → fetch_result
+    5. synthesize_results - combine all results
+    """
     state: BuyerState = dict(initial_state)
     trace: list[GraphNodeOutput] = []
     task_id = initial_state.get("task_id", "unknown")
-    query = initial_state.get("query", "")[:60]
+    query = initial_state.get("query", initial_state.get("user_goal", ""))[:60]
 
     try:
         writer = get_stream_writer()
     except (RuntimeError, AttributeError):
         writer = None
 
-    # Initial nodes: discover, plan, evaluate
-    initial_nodes = [
-        ("discover_seller", "Discover Seller", "planning", discover_seller),
-        ("plan_research_steps", "ReAct: Reason", "planning", plan_research_steps),
-        ("evaluate_research_need", "Check: Need Research?", "planning", evaluate_research_need),
-    ]
+    def _run_node(node_name: str, title: str, phase: str, node_fn, node_state: BuyerState | None = None) -> dict:
+        """Execute a single node and record trace."""
+        if node_state is None:
+            node_state = state
 
-    # Execute initial nodes
-    for node_name, title, phase, node_fn in initial_nodes:
-        input_state = dict(state)
+        input_state = dict(node_state)
         start_time = time.time()
 
         if writer:
@@ -64,24 +88,21 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
                 "query": query,
             })
 
-        output = node_fn(state)
+        output = node_fn(node_state)
         duration_ms = int((time.time() - start_time) * 1000)
-        state.update(output)
 
         thinking = output.get("thinking", "")
         status = "done" if not output.get("error") else "error"
 
-        event_data = {
-            "event_type": "node_complete",
-            "task_id": task_id,
-            "node": node_name,
-            "title": title,
-            "status": status,
-            "duration_ms": duration_ms,
-        }
-
         if writer:
-            writer(event_data)
+            writer({
+                "event_type": "node_complete",
+                "task_id": task_id,
+                "node": node_name,
+                "title": title,
+                "status": status,
+                "duration_ms": duration_ms,
+            })
 
         trace.append(
             GraphNodeOutput(
@@ -93,9 +114,10 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
                 reasoning=thinking,
                 input_state=_snapshot(input_state),
                 output=_snapshot(output),
-                state_after=_snapshot(dict(state)),
+                state_after=_snapshot(dict(node_state)),
             )
         )
+
         if output.get("error"):
             if writer:
                 writer({
@@ -104,118 +126,76 @@ def execute_buyer_graph_with_trace(initial_state: BuyerState) -> tuple[BuyerStat
                     "node": node_name,
                     "error": output.get("error"),
                 })
-            break
 
-    # Conditional routing based on research need
-    if state.get("error"):
-        # Already errored out, return
+        return output
+
+    # Step 1: Validate scope
+    output = _run_node("validate_scope", "Validate Scope", "routing", validate_scope)
+    state.update(output)
+
+    if not state.get("within_scope", True):
+        # Out of scope - build rejection result and return
+        state["result"] = _build_rejection_result(state)
         return state, trace
 
-    needs_research = state.get("needs_external_research", True)
+    # Step 2: Decompose goal into tasks
+    output = _run_node("decompose_goal", "Decompose Goal", "planning", decompose_goal)
+    state.update(output)
 
-    if needs_research:
-        # Full seller workflow
-        seller_nodes = [
-            ("execute_payment", "Execute Payment", "execute", execute_payment),
-            ("send_research_request", "Send Research", "execute", send_research_request),
-            ("fetch_result", "Fetch Result", "execute", fetch_result),
-        ]
-    else:
-        # Direct answer workflow
-        seller_nodes = [
-            ("format_direct_answer", "Format Answer", "execute", format_direct_answer),
-        ]
+    tasks = state.get("tasks", [])
+    task_results = []
 
-    # Execute conditional nodes
-    for node_name, title, phase, node_fn in seller_nodes:
-        input_state = dict(state)
-        start_time = time.time()
+    # Step 3: Execute each task
+    for task_idx, task in enumerate(tasks, 1):
+        task_state = {**state, "task_id": task.get("task_id", f"task-{task_idx}"), "query": task.get("query", "")}
 
-        if writer:
-            writer({
-                "event_type": "node_start",
-                "task_id": task_id,
-                "node": node_name,
-                "title": title,
-                "query": query,
-            })
+        # 3a. Discover seller (from connected_seller_ids)
+        output = _run_node(f"discover_seller_{task_idx}", f"Discover Seller (Task {task_idx})", "planning", discover_seller, task_state)
+        task_state.update(output)
 
-        output = node_fn(state)
-        duration_ms = int((time.time() - start_time) * 1000)
-        state.update(output)
+        # 3b. Execute payment
+        output = _run_node(f"execute_payment_{task_idx}", f"Execute Payment (Task {task_idx})", "execute", execute_payment, task_state)
+        task_state.update(output)
 
-        thinking = output.get("thinking", "")
-        status = "done" if not output.get("error") else "error"
+        # 3c. Send research request
+        output = _run_node(f"send_research_{task_idx}", f"Send Research (Task {task_idx})", "execute", send_research_request, task_state)
+        task_state.update(output)
 
-        event_data = {
-            "event_type": "node_complete",
-            "task_id": task_id,
-            "node": node_name,
-            "title": title,
-            "status": status,
-            "duration_ms": duration_ms,
-        }
+        # 3d. Fetch result
+        output = _run_node(f"fetch_result_{task_idx}", f"Fetch Result (Task {task_idx})", "execute", fetch_result, task_state)
+        task_state.update(output)
 
-        if node_name == "execute_payment" and not output.get("error"):
-            payment_offer = output.get("payment_offer", {})
-            event_data["payment_details"] = {
-                "amount_usdc": payment_offer.get("amount_usdc", "0"),
-                "seller_address": payment_offer.get("pay_to", ""),
-            }
+        if task_state.get("result"):
+            task_results.append(task_state["result"])
 
-        if node_name == "send_research_request" and not output.get("error"):
-            event_data["research_request_sent"] = {
-                "seller_url": state.get("seller_url", ""),
-                "query": query,
-            }
+    state["task_results"] = task_results
 
-        if node_name in ("fetch_result", "format_direct_answer") and not output.get("error"):
-            result = output.get("result", {})
-            event_data["research_result"] = {
-                "title": result.get("title", ""),
-                "summary": result.get("summary", "")[:200],
-                "bullets_count": len(result.get("bullets", [])),
-            }
-
-        if writer:
-            writer(event_data)
-
-        trace.append(
-            GraphNodeOutput(
-                node_name=node_name,
-                title=title,
-                phase=phase,
-                status=status,
-                duration_ms=duration_ms,
-                reasoning=thinking,
-                input_state=_snapshot(input_state),
-                output=_snapshot(output),
-                state_after=_snapshot(dict(state)),
-            )
-        )
-        if output.get("error"):
-            if writer:
-                writer({
-                    "event_type": "error",
-                    "task_id": task_id,
-                    "node": node_name,
-                    "error": output.get("error"),
-                })
-            break
+    # Step 4: Synthesize results
+    output = _run_node("synthesize_results", "Synthesize Results", "synthesis", synthesize_results)
+    state.update(output)
 
     return state, trace
 
+
 builder = StateGraph(BuyerState)
+builder.add_node("validate_scope", validate_scope)
+builder.add_node("decompose_goal", decompose_goal)
 builder.add_node("discover_seller", discover_seller)
-builder.add_node("plan_research_steps", plan_research_steps)
 builder.add_node("execute_payment", execute_payment)
 builder.add_node("send_research_request", send_research_request)
 builder.add_node("fetch_result", fetch_result)
-builder.add_edge(START, "discover_seller")
-builder.add_edge("discover_seller", "plan_research_steps")
-builder.add_edge("plan_research_steps", "execute_payment")
+builder.add_node("synthesize_results", synthesize_results)
+
+builder.add_edge(START, "validate_scope")
+builder.add_conditional_edges(
+    "validate_scope",
+    lambda s: "decompose_goal" if s.get("within_scope", True) else END,
+)
+builder.add_edge("decompose_goal", "discover_seller")
+builder.add_edge("discover_seller", "execute_payment")
 builder.add_edge("execute_payment", "send_research_request")
 builder.add_edge("send_research_request", "fetch_result")
-builder.add_edge("fetch_result", END)
+builder.add_edge("fetch_result", "synthesize_results")
+builder.add_edge("synthesize_results", END)
 
 buyer_graph = builder.compile()

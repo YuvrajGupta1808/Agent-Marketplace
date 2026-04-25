@@ -51,38 +51,30 @@ def _extract_json(content: str) -> dict:
 
 
 
-def _live_research(state: SellerState) -> tuple[str, list[str]]:
-    """Generate research using LLM with robust JSON handling."""
+def _live_research(state: SellerState) -> str:
+    """Generate research using LLM and return as plain text."""
     settings = get_settings()
     client = OpenAI(
         api_key=settings.featherless_api_key.get_secret_value(),
         base_url=settings.featherless_base_url,
     )
 
-    context = ""
-    if state.get("retrieval_context"):
-        context = "\n".join(f"- {item['title']}: {item['snippet']}" for item in state["retrieval_context"])
-
-    context_section = f"**Retrieved Context:**\n{context}\n\n" if context else ""
+    context = state.get("retrieval_context", "")
+    context_section = f"Search Results:\n{context}\n\n" if context else ""
 
     completion = client.chat.completions.create(
         model=settings.seller_model,
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a research analyst. Generate exactly this JSON format:\n"
-                    '{"summary": "2-3 sentences of key findings", '
-                    '"bullets": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5"]}\n'
-                    "Do NOT add any text before or after the JSON. Do NOT use markdown. Only JSON."
-                ),
+                "content": "You are a research analyst. Provide a clear, informative response to the user's query based on the search results. Write naturally without any JSON or special formatting.",
             },
             {
                 "role": "user",
                 "content": (
                     f"{context_section}"
                     f"Query: {state['query']}\n\n"
-                    "Return ONLY the JSON, nothing else."
+                    "Provide a comprehensive research response."
                 ),
             },
         ],
@@ -90,19 +82,8 @@ def _live_research(state: SellerState) -> tuple[str, list[str]]:
         temperature=0.5,
     )
 
-    response_text = completion.choices[0].message.content or ""
-    payload = _extract_json(response_text)
-    summary = payload.get("summary") or payload.get("Summary")
-    bullets = payload.get("bullets") or payload.get("Bullets") or []
-
-    # Validate and ensure we have content
-    if not summary or not isinstance(summary, str) or len(summary.strip()) < 10:
-        summary = f"Analysis of: {state['query']}"
-
-    if not isinstance(bullets, list) or len(bullets) == 0:
-        bullets = [f"Key information about {state['query']}", "Further research recommended"]
-
-    return summary, bullets
+    response_text = completion.choices[0].message.content or f"Analysis of: {state['query']}"
+    return response_text.strip()
 
 
 def run_research(state: SellerState) -> dict:
@@ -116,15 +97,13 @@ def run_research(state: SellerState) -> dict:
         )
 
     try:
-        summary, bullets = _live_research(state)
+        research_output = _live_research(state)
         return {
-            "draft_summary": summary,
-            "bullets": bullets,
+            "research_output": research_output,
         }
     except Exception as e:
         print(f"  ❌ Research generation failed: {type(e).__name__}: {str(e)[:100]}")
         # Fallback: return minimal valid response
         return {
-            "draft_summary": f"Analysis of: {state['query']}",
-            "bullets": ["Research completed"],
+            "research_output": f"Analysis of: {state['query']} - Research completed.",
         }

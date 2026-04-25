@@ -6,10 +6,11 @@ import re
 from openai import OpenAI
 
 from buyer_agent.state import BuyerState
+from buyer_agent.utils import extract_json
 from shared.config import get_settings
 
 
-def _extract_json(content: str) -> dict:
+def _extract_json_deprecated(content: str) -> dict:
     """Robustly extract JSON from LLM response."""
     cleaned = content.strip()
     cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
@@ -129,7 +130,7 @@ Return JSON:
             }
 
         try:
-            result = _extract_json(content)
+            result = extract_json(content)
         except ValueError:
             return {
                 "needs_external_research": True,

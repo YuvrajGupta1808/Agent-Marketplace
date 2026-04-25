@@ -4,9 +4,34 @@ from buyer_agent.state import BuyerState
 from shared.types import ResearchResult
 
 
-def fetch_result(state: BuyerState) -> dict:
-    import json
+def _coerce_result_dict(payload: dict, state: BuyerState) -> dict:
+    """Normalize seller response shapes into the buyer's ResearchResult fields."""
+    result_data = payload.get("result")
+    if result_data:
+        if isinstance(result_data, dict):
+            return dict(result_data)
+        return result_data.model_dump() if hasattr(result_data, "model_dump") else dict(result_data)
 
+    if "output" in payload:
+        output = payload.get("output") or "Research completed"
+        return {
+            "task_id": payload.get("task_id") or state.get("task_id", ""),
+            "title": f"Research: {(payload.get('query') or state.get('query') or 'Query')[:60]}",
+            "summary": str(output),
+            "bullets": [],
+            "citations": [],
+            "seller_name": "Seller Agent",
+            "is_ambiguous": False,
+            "metadata": {
+                "seller_response_shape": "output",
+                "query": payload.get("query") or state.get("query", ""),
+            },
+        }
+
+    raise ValueError("No result or output in response_body")
+
+
+def fetch_result(state: BuyerState) -> dict:
     if state.get("error"):
         print(f"    ❌ fetch_result: error from previous step: {state.get('error')}")
         return {"error": state["error"]}
@@ -15,17 +40,7 @@ def fetch_result(state: BuyerState) -> dict:
     try:
         payload = state["response_body"]
 
-        # Try to get result from payload
-        result_data = payload.get("result")
-        if not result_data:
-            raise ValueError("No result in response_body")
-
-        # If result_data is already a ResearchResult object/dict, use it
-        if isinstance(result_data, dict):
-            result_dict = result_data
-        else:
-            # Try to convert Pydantic model to dict
-            result_dict = result_data.model_dump() if hasattr(result_data, 'model_dump') else dict(result_data)
+        result_dict = _coerce_result_dict(payload, state)
 
         # Ensure required fields exist, extract from summary/bullets if needed
         title = result_dict.get("title")
@@ -72,4 +87,3 @@ def fetch_result(state: BuyerState) -> dict:
         error_msg = f"fetch_result error: {type(e).__name__}: {str(e)[:80]}"
         print(f"    ❌ {error_msg}")
         return {"error": error_msg}
-

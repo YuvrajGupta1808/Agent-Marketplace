@@ -6,10 +6,11 @@ import re
 from openai import OpenAI
 
 from buyer_agent.state import BuyerState
+from buyer_agent.utils import extract_json
 from shared.config import get_settings
 
 
-def _extract_json(content: str) -> dict:
+def _extract_json_deprecated(content: str) -> dict:
     """Robustly extract JSON from LLM response."""
     import re as _re
 
@@ -81,7 +82,7 @@ def _extract_json(content: str) -> dict:
     raise ValueError(f"Failed to parse JSON after all recovery attempts. Original: {content[:300]}...")
 
 
-def _generate_research_plan_llm(query: str) -> dict:
+def _generate_research_plan_llm(query: str, agent_context: str = "") -> dict:
     """Generate research plan using LLM."""
     settings = get_settings()
 
@@ -96,15 +97,17 @@ def _generate_research_plan_llm(query: str) -> dict:
         base_url=settings.featherless_base_url,
     )
 
+    system_content = "You are a strategic research planner. Return ONLY valid JSON.\n"
+    if agent_context:
+        system_content = f"{agent_context}\n\nAs this agent, plan a targeted research strategy. Return ONLY valid JSON.\n"
+    system_content += '{"research_steps": [{"step": "action", "why": "relevance"}]}'
+
     completion = client.chat.completions.create(
         model=settings.orchestrator_model,
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a strategic research planner. Return ONLY valid JSON.\n"
-                    '{"research_steps": [{"step": "action", "why": "relevance"}]}'
-                ),
+                "content": system_content,
             },
             {
                 "role": "user",
@@ -120,7 +123,7 @@ def _generate_research_plan_llm(query: str) -> dict:
         raise ValueError("LLM returned empty response for research planning")
 
     try:
-        plan_data = _extract_json(content)
+        plan_data = extract_json(content)
     except ValueError:
         # Fallback: if JSON parsing fails, create a default plan
         plan_data = {
@@ -138,7 +141,20 @@ def plan_research_steps(state: BuyerState) -> dict:
     query = state["query"].strip()
     print(f"  📝 plan_research_steps: '{query[:50]}'")
 
-    plan_data = _generate_research_plan_llm(query)
+    # Build agent context from identity fields
+    agent_context = ""
+    agent_name = state.get("buyer_agent_name", "")
+    agent_description = state.get("buyer_agent_description", "")
+    agent_system_prompt = state.get("buyer_agent_system_prompt", "")
+
+    if agent_system_prompt:
+        agent_context = agent_system_prompt
+    elif agent_description:
+        agent_context = f"You are {agent_name}: {agent_description}." if agent_name else agent_description
+    elif agent_name:
+        agent_context = f"You are {agent_name}."
+
+    plan_data = _generate_research_plan_llm(query, agent_context=agent_context)
     thinking = plan_data.get("thinking", "")
     research_steps = plan_data.get("research_steps", [])
     print(f"    ✓ Generated {len(research_steps)} research step(s)")

@@ -9,7 +9,6 @@ class SellerState(TypedDict, total=False):
     task_id: str
     query: str
     seller_agent_id: str
-    retrieval_context: list[dict[str, str]]
-    draft_summary: str
-    bullets: list[str]
-    result: dict[str, Any]
+    retrieval_context: str
+    research_output: str
+    output: dict[str, Any]

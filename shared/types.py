@@ -12,6 +12,12 @@ class TaskSpec(BaseModel):
     objective: str = "Research and return a concise, cited answer."
 
 
+class AgentTask(BaseModel):
+    task_id: str
+    query: str
+    objective: str = ""
+
+
 class ResearchCitation(BaseModel):
     title: str
     url: str
@@ -58,6 +64,8 @@ class AgentRecord(BaseModel):
     user_id: str
     role: Literal["buyer", "seller"]
     name: str
+    description: str = ""
+    system_prompt: str = ""
     endpoint_url: str | None = None
     created_at: str
     wallet: WalletRecord
@@ -73,6 +81,8 @@ class CreateAgentRequest(BaseModel):
     user_id: str
     role: Literal["buyer", "seller"]
     name: str
+    description: str = ""
+    system_prompt: str = ""
     endpoint_url: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -87,7 +97,7 @@ class ResearchRequest(BaseModel):
 class RunRequest(BaseModel):
     user_goal: str
     buyer_agent_id: str
-    seller_agent_id: str
+    seller_agent_id: str | None = None
     thread_id: str = "demo-thread"
 
 

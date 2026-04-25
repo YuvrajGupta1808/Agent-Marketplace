@@ -24,7 +24,7 @@ def seed_database() -> None:
     repo = MarketplaceRepository()
 
     # Check if already seeded
-    seeded = repo.get_app_config("seeded_v1")
+    seeded = repo.get_app_config("seeded_v3")
     if seeded:
         print("✓ Database already seeded. Skipping.")
         return
@@ -36,12 +36,12 @@ def seed_database() -> None:
         print("⚠️  Circle credentials not configured. Skipping agent seeding.")
         print("   → Set CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET to enable wallet creation")
         print("   → Agents can be created manually via the UI")
-        repo.set_app_config("seeded_v1", "stub")
+        repo.set_app_config("seeded_v3", "stub")
         return
 
     try:
-        # Create demo seller user
-        seller_user_req = CreateUserRequest(display_name="Demo Seller", external_id="demo-seller")
+        # Create test seller user with fake name
+        seller_user_req = CreateUserRequest(display_name="Aurora Labs", external_id="aurora-labs")
         seller_user = repo.create_user(seller_user_req)
         print(f"  Created seller user: {seller_user.id}")
 
@@ -51,7 +51,7 @@ def seed_database() -> None:
         wallet_info = circle_client.create_agent_wallet(
             wallet_set_id=wallet_set_id,
             ref_id=f"seller:{seller_user.id}",
-            name="Demo Seller Agent",
+            name="DuckDuckGo Search Agent",
         )
         wallet_address = wallet_info.address if hasattr(wallet_info, 'address') else wallet_info.get('address')
         print(f"  Created seller wallet: {wallet_address}")
@@ -60,37 +60,20 @@ def seed_database() -> None:
         # Create seller agent
         seller_agent_req = CreateAgentRequest(
             user_id=seller_user.id,
-            name="Demo Seller Agent",
+            name="DuckDuckGo",
             role="seller",
+            metadata={
+                "description": "Privacy-focused search agent powered by DuckDuckGo API for instant information retrieval",
+                "use_case": "Quick searches, privacy-preserving research, instant information lookup, anonymous browsing",
+                "category": "Search",
+                "creator_name": "Aurora Labs",
+            },
         )
         seller_agent = repo.create_agent(seller_agent_req, wallet_info)
         print(f"  Created seller agent: {seller_agent.id}")
 
-        # Create demo buyer user
-        buyer_user_req = CreateUserRequest(display_name="Demo Buyer", external_id="demo-buyer")
-        buyer_user = repo.create_user(buyer_user_req)
-        print(f"  Created buyer user: {buyer_user.id}")
-
-        # Provision Circle wallet for buyer
-        wallet_info_buyer = circle_client.create_agent_wallet(
-            wallet_set_id=wallet_set_id,
-            ref_id=f"buyer:{buyer_user.id}",
-            name="Demo Buyer Agent",
-        )
-        buyer_wallet_address = wallet_info_buyer.address if hasattr(wallet_info_buyer, 'address') else wallet_info_buyer.get('address')
-        print(f"  Created buyer wallet: {buyer_wallet_address}")
-
-        # Create buyer agent
-        buyer_agent_req = CreateAgentRequest(
-            user_id=buyer_user.id,
-            name="Demo Buyer Agent",
-            role="buyer",
-        )
-        buyer_agent = repo.create_agent(buyer_agent_req, wallet_info_buyer)
-        print(f"  Created buyer agent: {buyer_agent.id}")
-
         # Mark as seeded
-        repo.set_app_config("seeded_v1", "true")
+        repo.set_app_config("seeded_v3", "true")
         print("✓ Seeding complete!")
 
     except Exception as e:

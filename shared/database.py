@@ -75,6 +75,15 @@ def initialize_database() -> None:
         )
         connection.commit()
 
+        # Migrate existing databases: add description and system_prompt columns if not present
+        for col, col_type in [("description", "TEXT NOT NULL DEFAULT ''"),
+                              ("system_prompt", "TEXT NOT NULL DEFAULT ''")]:
+            try:
+                connection.execute(f"ALTER TABLE agents ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+        connection.commit()
+
 
 def get_connection() -> sqlite3.Connection:
     initialize_database()

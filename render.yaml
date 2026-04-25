@@ -18,7 +18,7 @@ services:
       - key: SELLER_PRICE_USDC
         value: 0.001
       - key: REQUEST_TIMEOUT_SECONDS
-        value: 60
+        value: 90
       - key: APP_ENV
         value: production
     healthCheckPath: /health

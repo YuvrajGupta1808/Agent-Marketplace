@@ -6,6 +6,8 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from seller_agent.graph import seller_graph
 from shared.config import get_settings
@@ -34,6 +36,20 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Seller Agent", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class TestResearchRequest(BaseModel):
+    query: str
+    seller_agent_id: str
+    user_id: str
+    task_id: str = "test-task"
 
 
 @app.post("/research")
@@ -95,3 +111,25 @@ def research_endpoint(
         content=graph_result,
         headers={PAYMENT_RESPONSE_HEADER: receipt.model_dump_json()},
     )
+
+
+@app.post("/research/test")
+def research_test_endpoint(request: TestResearchRequest):
+    """Direct research endpoint — no payment required. For development/testing only."""
+    try:
+        seller: AgentRecord = repository.get_agent(request.seller_agent_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Seller agent {request.seller_agent_id!r} not found.")
+    if seller.role != "seller":
+        raise HTTPException(status_code=400, detail="seller_agent_id must reference a seller agent.")
+    if seller.user_id != request.user_id:
+        raise HTTPException(status_code=403, detail="You do not have permission to test this seller agent.")
+
+    graph_result = seller_graph.invoke(
+        {
+            "task_id": request.task_id,
+            "query": request.query,
+            "seller_agent_id": request.seller_agent_id,
+        }
+    )
+    return JSONResponse(content=graph_result)

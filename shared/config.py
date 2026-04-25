@@ -26,8 +26,8 @@ class Settings(BaseSettings):
 
     planner_mode: Literal["heuristic", "live"] = "heuristic"
     research_mode: Literal["stub", "live"] = "stub"
-    seller_price_usdc: float = 0.001
-    request_timeout_seconds: float = 30.0
+    seller_price_usdc: float = 0.01
+    request_timeout_seconds: float = 90.0
 
     featherless_api_key: SecretStr | None = None
     featherless_base_url: str = "https://api.featherless.ai/v1"
