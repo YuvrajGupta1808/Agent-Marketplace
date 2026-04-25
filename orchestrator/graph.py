@@ -6,6 +6,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from buyer_agent.graph import execute_buyer_graph_with_trace
+from orchestrator.nodes.clarifier import ask_clarification
 from orchestrator.state import OrchestratorState
 from shared.repository import repository
 from shared.types import BuyerWorkflowRecord, PaymentRecord, ResearchResult
@@ -47,7 +48,13 @@ def _collect_payments(results: list[ResearchResult]) -> tuple[list[str], list[Pa
 
 def buyer_agent_node(state: dict) -> dict:
     """Execute autonomous buyer agent for the user goal."""
-    print(f"\n🤖 buyer_agent_node: user_goal='{state['user_goal'][:50]}'")
+    goal = state['user_goal']
+    if state.get('clarification_answer'):
+        goal = f"{goal}\n\nClarification from user: {state['clarification_answer']}"
+        print(f"\n🤖 buyer_agent_node (retry with clarification): goal='{goal[:50]}'")
+    else:
+        print(f"\n🤖 buyer_agent_node: user_goal='{goal[:50]}'")
+
     buyer_agent = repository.get_agent(state["buyer_agent_id"])
 
     # Extract connected_seller_ids from agent metadata
@@ -57,9 +64,9 @@ def buyer_agent_node(state: dict) -> dict:
 
     result, trace = execute_buyer_graph_with_trace(
         {
-            "user_goal": state["user_goal"],
+            "user_goal": goal,
             "task_id": str(uuid.uuid4())[:8],
-            "query": state["user_goal"],
+            "query": goal,
             "thread_id": state.get("thread_id", "unknown"),
             "buyer_agent_id": state["buyer_agent_id"],
             "buyer_wallet_id": buyer_agent.wallet.circle_wallet_id,
@@ -90,6 +97,21 @@ def buyer_agent_node(state: dict) -> dict:
         if isinstance(error, dict)
     ]
 
+    # Check if buyer agent needs clarification (out of scope)
+    pending_q = result.get("pending_question")
+    if pending_q:
+        print(f"  ℹ️ Buyer agent needs clarification: {pending_q[:60]}...")
+        return {
+            "buyer_workflows": buyer_workflows,
+            "failed_tasks": failed_task_ids,
+            "payments": [],
+            "transaction_hashes": [],
+            "results": [],
+            "final_answer": None,
+            "pending_question": pending_q,
+            "clarification_answer": None,
+        }
+
     if result.get("error"):
         return {
             "buyer_workflows": buyer_workflows,
@@ -113,6 +135,8 @@ def buyer_agent_node(state: dict) -> dict:
             "results": research_results,
             "final_answer": final_answer,
             "failed_tasks": failed_task_ids,
+            "pending_question": None,
+            "clarification_answer": None,
         }
 
     # Otherwise, extract result if it exists
@@ -127,6 +151,8 @@ def buyer_agent_node(state: dict) -> dict:
             "payments": payments,
             "failed_tasks": failed_task_ids,
             "final_answer": None,
+            "pending_question": None,
+            "clarification_answer": None,
         }
 
     return {
@@ -136,12 +162,41 @@ def buyer_agent_node(state: dict) -> dict:
         "transaction_hashes": [],
         "results": [],
         "final_answer": None,
+        "pending_question": None,
+        "clarification_answer": None,
     }
+
+
+def _route_after_buyer(state: OrchestratorState) -> str:
+    """Route to clarification if pending question, otherwise end."""
+    if state.get("pending_question"):
+        print(f"\n🛣️ Routing to clarification: pending_question = '{state['pending_question'][:60]}...'")
+        return "ask_clarification"
+    return "end"
+
+
+def _update_goal_with_clarification(state: OrchestratorState) -> dict:
+    """Update user_goal with clarification answer before retrying buyer agent."""
+    if state.get("clarification_answer"):
+        return {
+            "user_goal": f"{state['user_goal']}\n\nClarification: {state['clarification_answer']}",
+            "pending_question": None,
+        }
+    return {}
 
 
 builder = StateGraph(OrchestratorState)
 builder.add_node("buyer_agent_node", buyer_agent_node)
+builder.add_node("ask_clarification", ask_clarification)
 builder.add_edge(START, "buyer_agent_node")
-builder.add_edge("buyer_agent_node", END)
+builder.add_conditional_edges(
+    "buyer_agent_node",
+    _route_after_buyer,
+    {
+        "ask_clarification": "ask_clarification",
+        "end": END,
+    },
+)
+builder.add_edge("ask_clarification", "buyer_agent_node")
 
 orchestrator_graph = builder.compile(checkpointer=InMemorySaver())

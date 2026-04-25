@@ -20,3 +20,5 @@ class OrchestratorState(TypedDict, total=False):
     payments: Annotated[list[PaymentRecord], operator.add]
     final_answer: str | None
     error: str | None
+    pending_question: str | None
+    clarification_answer: str | None
